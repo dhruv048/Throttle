@@ -45,17 +45,6 @@ class _ShellState extends State<Shell> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      HomeScreen(
-        onStartRide: () => setState(() => index = 2),
-        onViewRoute: () => setState(() => index = 1),
-      ),
-      const DiscoverScreen(),
-      const RecordScreen(),
-      const ActivityScreen(),
-      const ProfileScreen(),
-    ];
-
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Center(
@@ -63,7 +52,24 @@ class _ShellState extends State<Shell> {
           constraints: const BoxConstraints(maxWidth: 440),
           child: Column(
             children: [
-              Expanded(child: SafeArea(bottom: false, child: pages[index])),
+              Expanded(
+                child: SafeArea(
+                  bottom: false,
+                  child: IndexedStack(
+                    index: index,
+                    children: [
+                      HomeScreen(
+                        onStartRide: () => setState(() => index = 2),
+                        onViewRoute: () => setState(() => index = 1),
+                      ),
+                      const DiscoverScreen(),
+                      const RecordScreen(),
+                      const ActivityScreen(),
+                      const ProfileScreen(),
+                    ],
+                  ),
+                ),
+              ),
               ThrottleBottomNav(
                 index: index,
                 onChanged: (i) => setState(() => index = i),

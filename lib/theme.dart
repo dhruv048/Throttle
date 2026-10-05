@@ -47,14 +47,13 @@ class AppTheme {
 TextStyle displayStyle({
   double size = 34,
   Color? color,
-  FontWeight weight = FontWeight.w400,
-  double tracking = -0.6,
+  FontWeight weight = FontWeight.w600,
+  double tracking = 1,
 }) {
-  return GoogleFonts.anton(
+  return GoogleFonts.oswald(
     fontSize: size,
     color: color ?? AppColors.foreground,
     fontWeight: weight,
-    letterSpacing: tracking,
     height: 1.0,
   );
 }
@@ -63,10 +62,10 @@ TextStyle monoStyle({
   double size = 10,
   Color? color,
   FontWeight weight = FontWeight.w400,
-  double tracking = 0.2 * 10,
+  double tracking = 1,
   bool uppercase = true,
 }) {
-  return GoogleFonts.jetBrainsMono(
+  return GoogleFonts.openSans(
     fontSize: size,
     color: color ?? AppColors.mutedForeground,
     fontWeight: weight,
@@ -76,11 +75,11 @@ TextStyle monoStyle({
 }
 
 TextStyle labelMono({double size = 10, Color? color}) {
-  return GoogleFonts.jetBrainsMono(
+  return GoogleFonts.openSans(
     fontSize: size,
     color: color ?? AppColors.mutedForeground,
     fontWeight: FontWeight.w400,
-    letterSpacing: 2.0,
+    letterSpacing: 1.0,
     height: 1.3,
   );
 }

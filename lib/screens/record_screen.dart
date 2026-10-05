@@ -2,22 +2,23 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 import '../data.dart';
 import '../theme.dart';
-import '../widgets/route_map.dart';
+import '../widgets/tracked_route_map.dart';
 import '../widgets/ui.dart';
 
 enum RideStatus { idle, riding, paused, done }
 
 const privacyOpts = ['Public', 'Followers', 'Private'];
 
-double haversine(Position a, Position b) {
+double haversineKm(double lat1, double lon1, double lat2, double lon2) {
   const r = 6371.0;
   double toR(double d) => d * math.pi / 180;
-  final dLat = toR(b.latitude - a.latitude);
-  final dLon = toR(b.longitude - a.longitude);
+  final dLat = toR(lat2 - lat1);
+  final dLon = toR(lon2 - lon1);
   final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
-      math.cos(toR(a.latitude)) * math.cos(toR(b.latitude)) * math.sin(dLon / 2) * math.sin(dLon / 2);
+      math.cos(toR(lat1)) * math.cos(toR(lat2)) * math.sin(dLon / 2) * math.sin(dLon / 2);
   return 2 * r * math.asin(math.sqrt(h));
 }
 
@@ -45,57 +46,204 @@ class _RecordScreenState extends State<RecordScreen> {
   late String bike;
   String privacy = 'Followers';
   Position? last;
+  final List<LatLng> track = [];
   StreamSubscription<Position>? watch;
   Timer? ticker;
+
+  static const _maxAccuracyM = 40.0;
+  static const _minPointGapKm = 0.005;
 
   @override
   void initState() {
     super.initState();
     bike = me.bikes.first.name;
+    print('inside indittt');
     _startGps();
   }
 
+
   Future<void> _startGps() async {
-    final enabled = await Geolocator.isLocationServiceEnabled();
-    if (!enabled) {
-      if (mounted) setState(() => gps = 'GPS unavailable');
-      return;
-    }
-    var permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
-      if (mounted) setState(() => gps = 'Allow location to track');
-      return;
-    }
-    watch = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 0),
-    ).listen(
-      (p) {
-        if (!mounted) return;
-        setState(() {
-          gps = 'GPS locked · ±${p.accuracy.round()} m';
-          final raw = p.speed;
-          final mps = (raw.isNaN || raw < 0) ? 0.0 : raw;
-          final kmh = (mps * 3.6).round();
-          speed = kmh;
-          top = math.max(top, kmh);
-          if (status == RideStatus.riding && last != null) {
-            km += haversine(last!, p);
+    print('========== GPS DEBUG START ==========');
+
+    try {
+      print('1. Before isLocationServiceEnabled');
+
+      final enabled = await Geolocator.isLocationServiceEnabled()
+          .timeout(const Duration(seconds: 5));
+
+      print('2. isLocationServiceEnabled returned: $enabled');
+
+      if (!enabled) {
+        print('3. LOCATION SERVICE IS DISABLED');
+
+        if (mounted) {
+          setState(() => gps = 'GPS unavailable');
+        }
+
+        return;
+      }
+
+      print('4. Before checkPermission');
+
+      var permission = await Geolocator.checkPermission()
+          .timeout(const Duration(seconds: 5));
+
+      print('5. checkPermission returned: $permission');
+      print('6. permission.toString(): ${permission.toString()}');
+
+      if (permission == LocationPermission.denied) {
+        print('7. Permission denied - requesting permission');
+
+        permission = await Geolocator.requestPermission()
+            .timeout(const Duration(seconds: 15));
+
+        print('8. requestPermission returned: $permission');
+      }
+
+      if (permission == LocationPermission.denied) {
+        print('9. Permission STILL denied');
+        return;
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        print('10. Permission denied forever');
+        return;
+      }
+
+      print('11. PERMISSION GRANTED');
+
+      print('12. Creating position stream');
+
+      watch = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 0,
+        ),
+      ).listen(
+            (p) {
+          print(
+            '13. POSITION: ${p.latitude}, ${p.longitude}, '
+                'accuracy=${p.accuracy}, speed=${p.speed}',
+          );
+
+          if (!mounted) return;
+
+          setState(() {
+            gps = 'GPS locked · ±${p.accuracy.round()} m';
+
+            final raw = p.speed;
+            final mps = (raw.isNaN || raw < 0) ? 0.0 : raw;
+            final kmh = (mps * 3.6).round();
+
+            speed = kmh;
+            top = math.max(top, kmh);
+
+            if (status == RideStatus.riding && last != null) {
+              km += haversineKm(
+                last!.latitude,
+                last!.longitude,
+                p.latitude,
+                p.longitude,
+              );
+            }
+            last = p;
+            _maybeAppendTrack(p);
+          });
+        },
+        onError: (error, stack) {
+          print('14. POSITION STREAM ERROR: $error');
+          print('15. STACK: $stack');
+
+          if (mounted) {
+            setState(() => gps = 'Location error');
           }
-          last = p;
-        });
-      },
-      onError: (_) {
-        if (mounted) setState(() => gps = 'Allow location to track');
-      },
-    );
+        },
+      );
+
+      print('16. Position stream created successfully');
+    } catch (e, stack) {
+      print('!!!!!!!! GPS EXCEPTION !!!!!!!!');
+      print('ERROR: $e');
+      print('ERROR TYPE: ${e.runtimeType}');
+      print('STACK: $stack');
+      print('!!!!!!!! END GPS EXCEPTION !!!!!!!!');
+
+      if (mounted) {
+        setState(() => gps = 'GPS error: $e');
+      }
+    }
+  }
+
+  // Future<void> _startGps() async {
+  //   print('start gpts called');
+  //   final enabled = await Geolocator.isLocationServiceEnabled();
+  //   if (!enabled) {
+  //     if (mounted) setState(() => gps = 'GPS unavailable');
+  //     return;
+  //   }
+  //   var permission = await Geolocator.checkPermission();
+  //   print('this is the value of the permission');
+  //   print(permission.toString());
+  //   permission = await Geolocator.requestPermission();
+  //   print('after the req');
+  //   if (permission == LocationPermission.denied) {
+  //     permission = await Geolocator.requestPermission();
+  //   }
+  //   if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+  //     if (mounted) setState(() => gps = 'Allow location to track');
+  //     return;
+  //   }
+  //   watch = Geolocator.getPositionStream(
+  //     locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 0),
+  //   ).listen(
+  //     (p) {
+  //       if (!mounted) return;
+  //       setState(() {
+  //         gps = 'GPS locked · ±${p.accuracy.round()} m';
+  //         final raw = p.speed;
+  //         final mps = (raw.isNaN || raw < 0) ? 0.0 : raw;
+  //         final kmh = (mps * 3.6).round();
+  //         speed = kmh;
+  //         top = math.max(top, kmh);
+  //         if (status == RideStatus.riding && last != null) {
+  //           km += haversineKm(last!.latitude, last!.longitude, p.latitude, p.longitude);
+  //         }
+  //         last = p;
+  //         _maybeAppendTrack(p);
+  //       });
+  //     },
+  //     onError: (_) {
+  //       if (mounted) setState(() => gps = 'Allow location to track');
+  //     },
+  //   );
+  // }
+
+
+
+  void _maybeAppendTrack(Position p, {bool force = false}) {
+    if (status != RideStatus.riding && !force) return;
+    if (!force && p.accuracy.isFinite && p.accuracy > _maxAccuracyM) return;
+    final point = LatLng(p.latitude, p.longitude);
+    if (track.isNotEmpty) {
+      final prev = track.last;
+      final gapKm = haversineKm(prev.latitude, prev.longitude, point.latitude, point.longitude);
+      if (gapKm == 0) return;
+      if (!force && gapKm < _minPointGapKm) return;
+    }
+    track.add(point);
   }
 
   void _setStatus(RideStatus next) {
     ticker?.cancel();
-    setState(() => status = next);
+    setState(() {
+      status = next;
+      if (next == RideStatus.riding && last != null) {
+        _maybeAppendTrack(last!, force: track.isEmpty);
+      }
+      if (next == RideStatus.done && last != null) {
+        _maybeAppendTrack(last!, force: true);
+      }
+    });
     if (next == RideStatus.riding) {
       ticker = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() => secs += 1);
@@ -110,6 +258,7 @@ class _RecordScreenState extends State<RecordScreen> {
       secs = 0;
       km = 0;
       top = 0;
+      track.clear();
     });
   }
 
@@ -140,7 +289,7 @@ class _RecordScreenState extends State<RecordScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      RouteMap(seed: secs + 3, height: 160),
+                      TrackedRouteMap(points: List<LatLng>.from(track), height: 220),
                       Padding(
                         padding: const EdgeInsets.all(16),
                         child: Wrap(
