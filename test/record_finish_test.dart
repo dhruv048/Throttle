@@ -8,7 +8,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:throttle/screens/record_screen.dart';
 import 'package:throttle/screens/share_ride_screen.dart';
-import 'package:throttle/widgets/tracked_route_map.dart';
+import 'package:throttle/widgets/map_tiles.dart';
+import 'package:throttle/widgets/bike_chooser.dart';
+import 'package:throttle/widgets/live_ride_map.dart';
 
 /// Map tiles without the network: a 1×1 transparent PNG for every tile.
 class _BlankTiles extends TileProvider {
@@ -56,8 +58,8 @@ void main() {
       (tester) async {
     final geo = _FakeGeolocator();
     GeolocatorPlatform.instance = geo;
-    TrackedRouteMap.debugTileProvider = _BlankTiles();
-    addTearDown(() => TrackedRouteMap.debugTileProvider = null);
+    MapTiles.debugProvider = _BlankTiles();
+    addTearDown(() => MapTiles.debugProvider = null);
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
@@ -65,6 +67,11 @@ void main() {
     await tester
         .pumpWidget(const MaterialApp(home: Scaffold(body: RecordScreen())));
     await tester.pump();
+
+    // Before the ride: the motorcycle chooser.
+    expect(find.text('Choose your ride'), findsOneWidget);
+    expect(find.byType(BikeChooser), findsOneWidget);
+    expect(find.byType(LiveRideMap), findsNothing);
 
     await tester.tap(find.text('START'));
     await tester.pump();
@@ -75,6 +82,21 @@ void main() {
       geo.fixes.add(_fix(t0.add(Duration(seconds: i)), i * 5.0));
       await tester.pump();
     }
+
+    // During the ride: live map with the stats overlaid.
+    expect(find.byType(LiveRideMap), findsOneWidget);
+    expect(find.text('RECORDING'), findsOneWidget);
+    // Speed and average are both 18 km/h at a steady 5 m/s.
+    expect(find.text('18 km/h', findRichText: true), findsNWidgets(2));
+    expect(find.text('0.15 km', findRichText: true), findsOneWidget);
+    final map = tester.widget<LiveRideMap>(find.byType(LiveRideMap));
+    expect(map.trail.length, greaterThan(10)); // a point every ~10 m here
+    expect(map.here!.latitude, closeTo(27.7 + 150 / 111320, 1e-9));
+
+    await tester.tap(find.text('PAUSE'));
+    await tester.pump();
+    expect(find.text('PAUSED'), findsOneWidget);
+    expect(find.text('RESUME'), findsOneWidget);
 
     await tester.tap(find.text('FINISH'));
     await tester.pump(); // one frame: no waiting on the save

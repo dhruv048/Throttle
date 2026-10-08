@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import '../models/models.dart';
 import '../theme.dart';
+import 'map_tiles.dart';
 
 class TrackedRouteMap extends StatelessWidget {
   const TrackedRouteMap({
@@ -56,10 +57,6 @@ class TrackedRouteMap extends StatelessWidget {
 
   static const _static = InteractionOptions(flags: InteractiveFlag.none);
 
-  /// Lets tests serve tiles without the network. Null = OpenStreetMap.
-  @visibleForTesting
-  static TileProvider? debugTileProvider;
-
   @override
   Widget build(BuildContext context) {
     if (points.isEmpty) {
@@ -97,11 +94,7 @@ class TrackedRouteMap extends StatelessWidget {
                 interactionOptions: interactive ? _interaction : _static,
               ),
         children: [
-          TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.wheelsclub.wheelsclub',
-            tileProvider: debugTileProvider,
-          ),
+          MapTiles.layer(),
           if (points.length > 1)
             PolylineLayer(
               polylines: [

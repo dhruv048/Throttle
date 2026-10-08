@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/models.dart';
 import '../repositories/bike_repository.dart';
@@ -9,6 +10,9 @@ import '../repositories/ride_repository.dart';
 import 'share_ride_screen.dart';
 import '../services/ride_tracker.dart';
 import '../theme.dart';
+import '../widgets/bike_chooser.dart';
+import '../widgets/bike_form_sheet.dart';
+import '../widgets/live_ride_map.dart';
 import '../widgets/tracked_route_map.dart';
 import '../widgets/ui.dart';
 
@@ -39,6 +43,13 @@ class _RecordScreenState extends State<RecordScreen> {
   String gps = 'Searching GPS…';
   String privacy = 'Followers';
   final _tracker = RideTracker();
+
+  /// The recorded track as map points, appended as the tracker accepts fixes.
+  final List<LatLng> _trail = [];
+
+  /// Latest position (any accuracy) for the live "you are here" dot.
+  LatLng? _here;
+  double? _hereAccuracy;
   DateTime? _startedAt;
   StreamSubscription<Position>? watch;
   bool _backgroundStream = false;
@@ -294,6 +305,9 @@ class _RecordScreenState extends State<RecordScreen> {
             altitudeM: p.altitude,
             altitudeAccuracyM: p.altitudeAccuracy,
           ));
+          _here = LatLng(p.latitude, p.longitude);
+          _hereAccuracy = p.accuracy;
+          _syncTrail();
         });
       },
       onError: (Object error) {
@@ -301,6 +315,13 @@ class _RecordScreenState extends State<RecordScreen> {
         if (mounted) setState(() => gps = 'Location error');
       },
     );
+  }
+
+  void _syncTrail() {
+    final pts = _tracker.points;
+    for (var i = _trail.length; i < pts.length; i++) {
+      _trail.add(LatLng(pts[i].lat, pts[i].lng));
+    }
   }
 
   void _setStatus(RideStatus next) {
@@ -312,6 +333,7 @@ class _RecordScreenState extends State<RecordScreen> {
       } else {
         _tracker.pause();
       }
+      _syncTrail();
       status = next;
     });
     if (next == RideStatus.riding) {
@@ -339,6 +361,7 @@ class _RecordScreenState extends State<RecordScreen> {
       _saved = null;
       _saveError = null;
       _tracker.reset();
+      _trail.clear();
     });
   }
 
@@ -574,207 +597,255 @@ class _RecordScreenState extends State<RecordScreen> {
       );
     }
 
-    final label = status == RideStatus.riding
-        ? 'Recording'
-        : status == RideStatus.paused
-            ? 'Paused'
-            : 'Record';
+    if (status == RideStatus.idle) return _buildChooser();
+    return _buildLive();
+  }
 
+  /// Before the ride: pick the motorcycle (and privacy), then START.
+  Widget _buildChooser() {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+      padding: const EdgeInsets.fromLTRB(0, 24, 0, 24),
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(label.toUpperCase(), style: labelMono(size: 11)),
-            Row(
-              children: [
-                const BlinkDot(),
-                const SizedBox(width: 8),
-                Text(gps, style: monoStyle(size: 11, tracking: 0)),
-              ],
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        RiseIn(
-          child: AppCard(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              children: [
-                const LabelMono('Speed'),
-                const SizedBox(height: 4),
-                Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(text: '$speed', style: displayStyle(size: 88)),
-                      TextSpan(
-                          text: ' km/h',
-                          style: displayStyle(
-                              size: 18, color: AppColors.mutedForeground)),
-                    ],
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  children: [
-                    Expanded(
-                        child: _Cell(
-                            v: km.toStringAsFixed(2), u: 'km', l: 'Distance')),
-                    const SizedBox(width: 12),
-                    Expanded(child: _Cell(v: fmt(secs), u: '', l: 'Time')),
-                    const SizedBox(width: 12),
-                    Expanded(child: _Cell(v: '$avg', u: 'km/h', l: 'Avg')),
-                  ],
-                ),
-                const SizedBox(height: 20),
-                if (status == RideStatus.idle)
-                  SheenButton(
-                    onTap: () => _setStatus(RideStatus.riding),
-                    child: Container(
-                      height: 64,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: AppColors.primary,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Text('START',
-                          style: displayStyle(
-                              size: 24, color: AppColors.primaryForeground)),
-                    ),
-                  )
-                else
-                  Row(
-                    children: [
-                      Expanded(
-                        child: SizedBox(
-                          height: 64,
-                          child: FilledButton(
-                            onPressed: () => _setStatus(
-                              status == RideStatus.riding
-                                  ? RideStatus.paused
-                                  : RideStatus.riding,
-                            ),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: AppColors.secondary,
-                              foregroundColor: AppColors.foreground,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16)),
-                            ),
-                            child: Text(
-                              status == RideStatus.riding ? 'PAUSE' : 'RESUME',
-                              style: displayStyle(size: 20),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: SizedBox(
-                          height: 64,
-                          child: FilledButton(
-                            onPressed: () => _setStatus(RideStatus.done),
-                            style: FilledButton.styleFrom(
-                              backgroundColor: AppColors.foreground,
-                              foregroundColor: AppColors.background,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16)),
-                            ),
-                            child: Text('FINISH',
-                                style: displayStyle(
-                                    size: 20, color: AppColors.background)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-              ],
-            ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('RECORD', style: labelMono(size: 11)),
+              Row(
+                children: [
+                  const BlinkDot(),
+                  const SizedBox(width: 8),
+                  Text(gps, style: monoStyle(size: 11, tracking: 0)),
+                ],
+              ),
+            ],
           ),
         ),
-        if (status == RideStatus.idle) ...[
-          const SizedBox(height: 16),
-          if (_bikes.isNotEmpty)
-            _Picker(
-              label: 'Motorcycle',
-              options: [for (final b in _bikes) b.name],
-              value: _bike?.name ?? '',
-              onChange: (name) => setState(() {
-                _bikeId = _bikes.firstWhere((b) => b.name == name).id;
-              }),
-            )
-          else
-            const AppCard(
-              padding: EdgeInsets.all(16),
-              child: Text(
-                'No bike loaded — this ride will count toward your primary bike.',
-                style:
-                    TextStyle(fontSize: 13, color: AppColors.mutedForeground),
-              ),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Text('Choose your ride', style: displayStyle(size: 32)),
+        ),
+        const SizedBox(height: 14),
+        RiseIn(
+          child: BikeChooser(
+            bikes: _bikes,
+            selectedId: _bikeId,
+            onSelect: (b) => setState(() => _bikeId = b.id),
+            onAdd: () async {
+              if (await showBikeFormSheet(context,
+                  defaultPrimary: _bikes.isEmpty)) {
+                await _loadBikes();
+              }
+            },
+          ),
+        ),
+        if (_bikes.isEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 10, 20, 0),
+            child: Text(
+              'No bike loaded — this ride will count toward your primary bike.',
+              style: TextStyle(fontSize: 13, color: AppColors.mutedForeground),
             ),
-          const SizedBox(height: 12),
-          _Picker(
-            label: 'Privacy',
+          ),
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: _Picker(
+            label: 'Who can see this ride',
             options: privacyOpts,
             value: privacy,
             onChange: (v) => setState(() => privacy = v),
           ),
-          const SizedBox(height: 12),
-          AppCard(
-            padding: const EdgeInsets.all(16),
+        ),
+        const SizedBox(height: 20),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: SheenButton(
+            onTap: () => _setStatus(RideStatus.riding),
+            child: Container(
+              height: 64,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.primary,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Text('START',
+                  style: displayStyle(
+                      size: 24, color: AppColors.primaryForeground)),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// During the ride: live map with the stats and controls overlaid.
+  Widget _buildLive() {
+    final riding = status == RideStatus.riding;
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: LiveRideMap(
+            trail: _trail,
+            here: _here,
+            accuracyM: _hereAccuracy,
+            topInset: 196,
+            bottomInset: 92,
+          ),
+        ),
+        Positioned(
+          top: 12,
+          left: 12,
+          right: 12,
+          child: _Overlay(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const LabelMono('Route'),
+                Row(
+                  children: [
+                    if (riding)
+                      const BlinkDot()
+                    else
+                      const Icon(Icons.pause, size: 12),
+                    const SizedBox(width: 6),
+                    Text(
+                      riding ? 'RECORDING' : 'PAUSED',
+                      style: labelMono(
+                          size: 11, color: riding ? AppColors.primary : null),
+                    ),
+                    const Spacer(),
+                    Text(gps, style: monoStyle(size: 10, tracking: 0)),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text.rich(
+                  TextSpan(children: [
+                    TextSpan(text: '$speed', style: displayStyle(size: 64)),
+                    TextSpan(
+                      text: ' km/h',
+                      style: displayStyle(
+                          size: 16, color: AppColors.mutedForeground),
+                    ),
+                  ]),
+                ),
                 const SizedBox(height: 4),
-                const Text('No route selected',
-                    style:
-                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                Row(
+                  children: [
+                    Expanded(
+                        child: _LiveStat(
+                            value: km.toStringAsFixed(2),
+                            unit: 'km',
+                            label: 'Distance')),
+                    Expanded(child: _LiveStat(value: fmt(secs), label: 'Time')),
+                    Expanded(
+                        child: _LiveStat(
+                            value: '$avg', unit: 'km/h', label: 'Avg')),
+                  ],
+                ),
               ],
             ),
           ),
-        ],
+        ),
+        Positioned(
+          left: 12,
+          right: 12,
+          bottom: 12,
+          child: Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: 64,
+                  child: FilledButton(
+                    onPressed: () => _setStatus(
+                        riding ? RideStatus.paused : RideStatus.riding),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: AppColors.foreground,
+                      elevation: 3,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
+                    ),
+                    child: Text(riding ? 'PAUSE' : 'RESUME',
+                        style: displayStyle(size: 20)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: SizedBox(
+                  height: 64,
+                  child: FilledButton(
+                    onPressed: () => _setStatus(RideStatus.done),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.foreground,
+                      foregroundColor: AppColors.background,
+                      elevation: 3,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
+                    ),
+                    child: Text('FINISH',
+                        style: displayStyle(
+                            size: 20, color: AppColors.background)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
 }
 
-class _Cell extends StatelessWidget {
-  const _Cell({required this.v, required this.u, required this.l});
+/// Translucent card that floats over the live map.
+class _Overlay extends StatelessWidget {
+  const _Overlay({required this.child});
 
-  final String v;
-  final String u;
-  final String l;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
       decoration: BoxDecoration(
-        color: AppColors.panel,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          LabelMono(l),
-          const SizedBox(height: 4),
-          Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(text: v, style: displayStyle(size: 20)),
-                if (u.isNotEmpty)
-                  TextSpan(
-                      text: ' $u',
-                      style: displayStyle(
-                          size: 12, color: AppColors.mutedForeground)),
-              ],
-            ),
-          ),
+        color: Colors.white.withValues(alpha: 0.93),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: const [
+          BoxShadow(
+              color: Color(0x26000000), blurRadius: 16, offset: Offset(0, 4)),
         ],
       ),
+      child: child,
+    );
+  }
+}
+
+class _LiveStat extends StatelessWidget {
+  const _LiveStat({required this.value, required this.label, this.unit = ''});
+
+  final String value;
+  final String unit;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          TextSpan(children: [
+            TextSpan(text: value, style: displayStyle(size: 22)),
+            if (unit.isNotEmpty)
+              TextSpan(
+                text: ' $unit',
+                style: displayStyle(size: 12, color: AppColors.mutedForeground),
+              ),
+          ]),
+          maxLines: 1,
+        ),
+        LabelMono(label),
+      ],
     );
   }
 }

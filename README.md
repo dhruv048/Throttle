@@ -48,6 +48,7 @@ Already configured for Android (`ACCESS_FINE_LOCATION`) and iOS (`NSLocationWhen
 - Activity: year totals, weekly km, monthly challenge and all your rides (including ones still waiting to sync)
 - Per-bike km: a DB trigger credits each ride's distance to its bike (`bikes.ridden_km`)
 - Distance: `RideTracker` (`lib/services/ride_tracker.dart`) filters GPS jitter/glitches, uses Doppler speed, and keeps recording with the screen off
+- Record: pick your motorcycle (photo cards), then a live map follows you and draws the track, with speed/distance/time/avg overlaid
 - FINISH auto-saves the ride to your profile (device first, then cloud); rides under 50 m aren't auto-saved
 - Share a ride as a 1080×1350 image (bike photo, your own photo, route map or plain background) via the OS share sheet
 - Bike photos: add/change when adding or editing a bike (Profile → tap a bike), stored in Supabase Storage
