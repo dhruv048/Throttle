@@ -50,6 +50,14 @@ class _RecordScreenState extends State<RecordScreen> {
   bool _saving = false;
   PendingRide? _saved;
   String? _saveError;
+
+  /// The finished ride's numbers, fixed at FINISH. Sharing uses this right
+  /// away; saving uses the same values so the image and the saved ride match.
+  RideRecord? _finished;
+
+  /// Bumped on reset, so a save that completes after "Done" doesn't attach
+  /// itself to the next ride.
+  int _rideGen = 0;
   List<BikeRecord> _bikes = [];
   String? _bikeId;
 
@@ -84,40 +92,67 @@ class _RecordScreenState extends State<RecordScreen> {
   /// Called automatically on FINISH: the ride goes to the device first and
   /// then to the rider's account (or syncs later if offline).
   Future<void> _saveRide() async {
-    if (_saving || _saved != null) return;
+    final r = _finished;
+    if (r == null || _saving || _saved != null) return;
+    final gen = _rideGen;
     setState(() {
       _saving = true;
       _saveError = null;
     });
 
-    final t = _tracker;
-    final km = t.distanceKm;
-    // If GPS never produced a moving segment, fall back to the clock.
-    final moving = t.movingSecs > 0 ? t.movingSecs.round() : secs;
-
     try {
       final saved = await RideRepository().shareRide(
-        title: 'Ride · ${km.toStringAsFixed(1)} km',
-        visibility: RideVisibility.fromLabel(privacy),
-        distanceKm: double.parse(km.toStringAsFixed(3)),
-        movingTimeSecs: moving,
-        avgSpeedKmh: moving > 0 ? km / (moving / 3600) : 0,
-        maxSpeedKmh: t.maxSpeedKmh,
-        elevationM: t.elevationGainM.roundToDouble(),
+        title: r.title,
+        visibility: r.visibility,
+        distanceKm: r.distanceKm,
+        movingTimeSecs: r.movingTimeSecs,
+        avgSpeedKmh: r.avgSpeedKmh,
+        maxSpeedKmh: r.maxSpeedKmh,
+        elevationM: r.elevationM,
         bikeId: _bike?.id,
         bikeName: _bike?.name ?? '',
-        points: List.of(t.points),
-        startedAt: _startedAt,
-        endedAt: DateTime.now(),
+        points: List.of(_tracker.points),
+        startedAt: r.startedAt,
+        endedAt: r.endedAt,
       );
-      if (!mounted) return;
-      setState(() => _saved = saved);
       _loadBikes(); // refresh ridden km
+      if (!mounted || gen != _rideGen) return;
+      setState(() => _saved = saved);
     } catch (e) {
-      if (mounted) setState(() => _saveError = 'Couldn\'t save ride: $e');
+      debugPrint('Ride save failed: $e');
+      if (mounted && gen == _rideGen) {
+        setState(
+            () => _saveError = 'Couldn\'t save this ride. Tap Retry save.');
+      }
     } finally {
-      if (mounted) setState(() => _saving = false);
+      if (mounted && gen == _rideGen) setState(() => _saving = false);
     }
+  }
+
+  /// Freezes the ride's stats the moment it ends.
+  RideRecord _snapshot() {
+    final t = _tracker;
+    final km = double.parse(t.distanceKm.toStringAsFixed(3));
+    // If GPS never produced a moving segment, fall back to the clock.
+    final moving = t.movingSecs > 0 ? t.movingSecs.round() : secs;
+    String uid = '';
+    try {
+      uid = Supabase.instance.client.auth.currentUser?.id ?? '';
+    } catch (_) {}
+    return RideRecord(
+      id: 'finished',
+      userId: uid,
+      bikeId: _bike?.id,
+      title: 'Ride · ${km.toStringAsFixed(1)} km',
+      visibility: RideVisibility.fromLabel(privacy),
+      distanceKm: km,
+      movingTimeSecs: moving,
+      avgSpeedKmh: moving > 0 ? km / (moving / 3600) : 0,
+      maxSpeedKmh: t.maxSpeedKmh,
+      elevationM: t.elevationGainM.roundToDouble(),
+      startedAt: _startedAt,
+      endedAt: DateTime.now(),
+    );
   }
 
   Future<void> _deleteRide() async {
@@ -155,19 +190,19 @@ class _RecordScreenState extends State<RecordScreen> {
     }
   }
 
+  /// Available as soon as the ride ends; doesn't wait for the save.
   void _openShare() {
-    final saved = _saved;
-    if (saved == null) return;
-    final uid = Supabase.instance.client.auth.currentUser?.id ?? '';
+    final r = _finished;
+    if (r == null) return;
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => ShareRideScreen(
         item: FeedItem(
-          ride: saved.toRecord(),
-          rider: Profile(id: uid),
+          ride: r,
+          rider: Profile(id: r.userId),
           bikeName: _bike?.name,
           bikePhotoUrl: _bike?.photoUrl,
-          points: saved.points,
-          pending: !saved.synced,
+          points: List.of(_tracker.points),
+          pending: _saved?.synced != true,
         ),
       ),
     ));
@@ -286,6 +321,7 @@ class _RecordScreenState extends State<RecordScreen> {
       });
     } else if (next == RideStatus.done) {
       _listen(background: false);
+      _finished = _snapshot();
       if (km >= _minAutoSaveKm) _saveRide();
     }
   }
@@ -297,6 +333,9 @@ class _RecordScreenState extends State<RecordScreen> {
       status = RideStatus.idle;
       secs = 0;
       _startedAt = null;
+      _finished = null;
+      _rideGen++;
+      _saving = false;
       _saved = null;
       _saveError = null;
       _tracker.reset();
@@ -340,7 +379,12 @@ class _RecordScreenState extends State<RecordScreen> {
             : Icon(icon, size: 16, color: color),
         const SizedBox(width: 8),
         Expanded(
-            child: Text(text, style: TextStyle(fontSize: 13, color: color))),
+            child: Text(
+          text,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 13, color: color),
+        )),
       ],
     );
   }
@@ -354,102 +398,131 @@ class _RecordScreenState extends State<RecordScreen> {
   @override
   Widget build(BuildContext context) {
     if (status == RideStatus.done) {
-      return ListView(
-        padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+      // Actions are pinned below the scrolling summary so SHARE RIDE is on
+      // screen the moment the ride ends, on any phone size.
+      return Column(
         children: [
-          RiseIn(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
               children: [
-                LabelMono('Ride complete', color: AppColors.primary),
-                const SizedBox(height: 4),
-                Text('Nice ride.', style: displayStyle(size: 34)),
-                const SizedBox(height: 16),
-                AppCard(
+                RiseIn(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      TrackedRouteMap.track(_tracker.points, height: 220),
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Wrap(
-                          runSpacing: 16,
+                      LabelMono('Ride complete', color: AppColors.primary),
+                      const SizedBox(height: 4),
+                      Text('Nice ride.', style: displayStyle(size: 34)),
+                      const SizedBox(height: 16),
+                      AppCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            SizedBox(
-                              width: MediaQuery.sizeOf(context).width / 2 - 32,
-                              child: StatBlock(
-                                  value: km.toStringAsFixed(2),
-                                  label: 'km',
-                                  valueSize: 30),
+                            TrackedRouteMap.track(_tracker.points, height: 220),
+                            Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Wrap(
+                                runSpacing: 16,
+                                children: [
+                                  SizedBox(
+                                    width:
+                                        MediaQuery.sizeOf(context).width / 2 -
+                                            32,
+                                    child: StatBlock(
+                                        value: km.toStringAsFixed(2),
+                                        label: 'km',
+                                        valueSize: 30),
+                                  ),
+                                  SizedBox(
+                                    width:
+                                        MediaQuery.sizeOf(context).width / 2 -
+                                            32,
+                                    child: StatBlock(
+                                        value: fmt(movingSecs),
+                                        label: 'moving time',
+                                        valueSize: 30),
+                                  ),
+                                  SizedBox(
+                                    width:
+                                        MediaQuery.sizeOf(context).width / 2 -
+                                            32,
+                                    child: StatBlock(
+                                        value: '$avg',
+                                        label: 'avg km/h',
+                                        valueSize: 30),
+                                  ),
+                                  SizedBox(
+                                    width:
+                                        MediaQuery.sizeOf(context).width / 2 -
+                                            32,
+                                    child: StatBlock(
+                                        value: '$top',
+                                        label: 'top km/h',
+                                        valueSize: 30),
+                                  ),
+                                ],
+                              ),
                             ),
-                            SizedBox(
-                              width: MediaQuery.sizeOf(context).width / 2 - 32,
-                              child: StatBlock(
-                                  value: fmt(movingSecs),
-                                  label: 'moving time',
-                                  valueSize: 30),
-                            ),
-                            SizedBox(
-                              width: MediaQuery.sizeOf(context).width / 2 - 32,
-                              child: StatBlock(
-                                  value: '$avg',
-                                  label: 'avg km/h',
-                                  valueSize: 30),
-                            ),
-                            SizedBox(
-                              width: MediaQuery.sizeOf(context).width / 2 - 32,
-                              child: StatBlock(
-                                  value: '$top',
-                                  label: 'top km/h',
-                                  valueSize: 30),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 12),
+                              decoration: const BoxDecoration(
+                                border: Border(
+                                    top: BorderSide(color: AppColors.border)),
+                              ),
+                              child: Text(
+                                [
+                                  if (_bike != null) _bike!.name,
+                                  privacy,
+                                  '${_tracker.elevationGainM.round()} m climbed',
+                                  'elapsed ${fmt(secs)}',
+                                ].join(' · '),
+                                style: monoStyle(size: 11, tracking: 0),
+                              ),
                             ),
                           ],
-                        ),
-                      ),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 12),
-                        decoration: const BoxDecoration(
-                          border:
-                              Border(top: BorderSide(color: AppColors.border)),
-                        ),
-                        child: Text(
-                          [
-                            if (_bike != null) _bike!.name,
-                            privacy,
-                            '${_tracker.elevationGainM.round()} m climbed',
-                            'elapsed ${fmt(secs)}',
-                          ].join(' · '),
-                          style: monoStyle(size: 11, tracking: 0),
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+            decoration: const BoxDecoration(
+              color: AppColors.background,
+              border: Border(top: BorderSide(color: AppColors.border)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 _saveStatus(),
                 const SizedBox(height: 12),
-                if (_saved != null) ...[
-                  SizedBox(
-                    height: 56,
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _openShare,
-                      icon: const Icon(Icons.ios_share),
-                      label: Text(
-                        'SHARE AS IMAGE',
-                        style: displayStyle(
-                            size: 20, color: AppColors.primaryForeground),
-                      ),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16)),
-                      ),
+                SizedBox(
+                  height: 56,
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _openShare,
+                    icon: const Icon(Icons.ios_share),
+                    label: Text(
+                      'SHARE RIDE',
+                      style: displayStyle(
+                          size: 20, color: AppColors.primaryForeground),
+                    ),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                ),
+                const SizedBox(height: 8),
+                // Saved or saving: Done + Delete. Not saved (too short or
+                // failed): Save + Discard.
+                if (_saved != null || _saving)
                   SizedBox(
                     height: 48,
                     width: double.infinity,
@@ -464,23 +537,22 @@ class _RecordScreenState extends State<RecordScreen> {
                       child: const Text('Done',
                           style: TextStyle(fontWeight: FontWeight.w600)),
                     ),
-                  ),
-                ] else if (!_saving)
+                  )
+                else
                   SizedBox(
-                    height: 56,
+                    height: 48,
                     width: double.infinity,
-                    child: FilledButton(
+                    child: OutlinedButton(
                       onPressed: _saveRide,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.primary,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.foreground,
+                        side: const BorderSide(color: AppColors.border),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16)),
                       ),
                       child: Text(
-                        _saveError != null ? 'RETRY SAVE' : 'SAVE ANYWAY',
-                        style: displayStyle(
-                            size: 20, color: AppColors.primaryForeground),
-                      ),
+                          _saveError != null ? 'Retry save' : 'Save anyway',
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
                     ),
                   ),
                 Center(
@@ -489,7 +561,7 @@ class _RecordScreenState extends State<RecordScreen> {
                         ? null
                         : (_saved != null ? _deleteRide : _reset),
                     child: Text(
-                      _saved != null ? 'Delete ride' : 'Discard',
+                      _saved != null || _saving ? 'Delete ride' : 'Discard',
                       style: const TextStyle(
                           fontSize: 14, color: AppColors.mutedForeground),
                     ),

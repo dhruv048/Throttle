@@ -56,6 +56,10 @@ class TrackedRouteMap extends StatelessWidget {
 
   static const _static = InteractionOptions(flags: InteractiveFlag.none);
 
+  /// Lets tests serve tiles without the network. Null = OpenStreetMap.
+  @visibleForTesting
+  static TileProvider? debugTileProvider;
+
   @override
   Widget build(BuildContext context) {
     if (points.isEmpty) {
@@ -96,6 +100,7 @@ class TrackedRouteMap extends StatelessWidget {
           TileLayer(
             urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
             userAgentPackageName: 'com.wheelsclub.wheelsclub',
+            tileProvider: debugTileProvider,
           ),
           if (points.length > 1)
             PolylineLayer(

@@ -1,0 +1,20 @@
+
+per bike ridden km not being recorded
+in all the ride preview/card, the map should be an actual map with the track traced on it rather than the grid bg
+activity page where all my rides appear
+calibrate distance tracking in activiews, shows exactly howmany km ridden
+the stats should be real not mock
+
+
+
+
+
+after the ride is done, make so that the ride is automatically saved to the user's profile and allow users to share ride with other apps in form of image
+let user add their own image, use image of their bike (which will be saved while adding bike and is editable), or share the image of the bike with the distance, time and other minor detials written on the image.
+
+
+
+The home feed downloads every ride's full track. Thirty 1-hour rides is about 15 MB of JSON parsed on the phone every refresh, yet the cards only draw 400 points. This is the biggest scaling problem. Fix: store a ~200-point preview per ride (measured at 1.5 KB) and load the full track only on the detail page.
+A ride in progress only exists in memory. If the app is killed mid-ride, the whole ride is lost. Fix: save the in-progress ride to the phone every few seconds.
+Too many decimal places. Coordinates are stored with 17 digits; 6 digits is 11 cm precision. Rounding cuts storage from 185 KB to 72 KB per hour (measured).
+GPS runs whenever the app is open. The Record tab is created at launch, so GPS polls once a second even on the Home tab, which drains battery. Fix: only listen while the Record tab is visible or a ride is active.
