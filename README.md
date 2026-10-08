@@ -1,41 +1,54 @@
 # Throttle (Flutter)
 
-Flutter port of the Throttle React app (motorcycle social feed: ride, record, share).
-
-The original web app remains in `../pixel-perfect-match-main`.
+Motorcycle social feed: ride, record, share — backed by Supabase.
 
 ## First-time setup
 
-This folder contains the Dart app. Generate iOS/Android project files, then add location permission strings used by Record.
-
 ```bash
-cd throttle
-flutter create . --org com.throttle --project-name throttle --platforms ios,android
 flutter pub get
 ```
 
-**Android** — in `android/app/src/main/AndroidManifest.xml` inside `<manifest>`:
+### Supabase
 
-```xml
-<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-```
-
-**iOS** — in `ios/Runner/Info.plist`:
-
-```xml
-<key>NSLocationWhenInUseUsageDescription</key>
-<string>Throttle uses your location to record ride distance and speed.</string>
-```
+1. Create a project at [supabase.com](https://supabase.com/dashboard)
+2. Run both SQL files in `supabase/migrations/` in order, then `supabase/seed.sql` for demo rides (see `supabase/README.md`)
+3. Enable **Google** under Authentication → Providers
+4. Add redirect URL: `com.wheelsclub.app://login-callback`
+5. Pass credentials when running:
 
 ```bash
-flutter run
+flutter run \
+  --dart-define=SUPABASE_URL=https://YOUR_PROJECT.supabase.co \
+  --dart-define=SUPABASE_ANON_KEY=YOUR_ANON_KEY \
+  --dart-define=GOOGLE_WEB_CLIENT_ID=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com
 ```
+
+### Location permissions
+
+Already configured for Android (`ACCESS_FINE_LOCATION`) and iOS (`NSLocationWhenInUseUsageDescription`).
+
+## Architecture
+
+| Layer | Path |
+|-------|------|
+| Schema / RLS / triggers | `supabase/migrations/` |
+| Models | `lib/models/` |
+| Repositories | `lib/repositories/` |
+| Auth + offline sync | `lib/services/` |
+| Login / onboarding | `lib/screens/auth/` |
+
+**SHARE RIDE** writes to a local JSON queue first (`LocalRideStore`), then uploads `rides` + `ride_tracks`. `RideSyncService` retries on launch, sign-in and whenever connectivity returns. Uploads are idempotent via `rides.local_id`, so a retry never duplicates a ride.
 
 ## What’s included
 
-- Home feed, nearby route, kudos, join group ride
-- Discover (routes / riders / clubs + search)
-- Record with GPS, start / pause / resume / finish, bike & privacy
-- Activity stats, weekly chart, challenge
-- Profile garage and privacy
+- Google sign-in → auto profile (`handle_new_user` trigger) → onboarding (username + first bike)
+- Ride visibility RLS: public / followers / private; owner-only edit/delete
+- Kudos & comment count triggers
+- Home feed and Activity read live rides; every ride card shows its GPS track on an OpenStreetMap map, tap for details
+- Activity: year totals, weekly km, monthly challenge and all your rides (including ones still waiting to sync)
+- Per-bike km: a DB trigger credits each ride's distance to its bike (`bikes.ridden_km`)
+- Distance: `RideTracker` (`lib/services/ride_tracker.dart`) filters GPS jitter/glitches, uses Doppler speed, and keeps recording with the screen off
+- FINISH auto-saves the ride to your profile (device first, then cloud); rides under 50 m aren't auto-saved
+- Share a ride as a 1080×1350 image (bike photo, your own photo, route map or plain background) via the OS share sheet
+- Bike photos: add/change when adding or editing a bike (Profile → tap a bike), stored in Supabase Storage
+- Discover and the home "Nearby"/group-ride cards still use mock data from `lib/data.dart`

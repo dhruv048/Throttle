@@ -42,7 +42,8 @@ class ThrottleBottomNav extends StatelessWidget {
             children: List.generate(_items.length, (i) {
               final selected = i == index;
               final item = _items[i];
-              final color = selected ? AppColors.primary : AppColors.mutedForeground;
+              final color =
+                  selected ? AppColors.primary : AppColors.mutedForeground;
               return Expanded(
                 child: InkWell(
                   onTap: () => onChanged(i),
@@ -60,7 +61,8 @@ class ThrottleBottomNav extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(
                           item.$3.toUpperCase(),
-                          style: monoStyle(size: 9, color: color, tracking: 1.08),
+                          style:
+                              monoStyle(size: 9, color: color, tracking: 1.08),
                         ),
                       ],
                     ),

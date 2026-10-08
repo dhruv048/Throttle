@@ -1,9 +1,13 @@
 import 'dart:async';
-import 'dart:math' as math;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:latlong2/latlong.dart';
-import '../data.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../models/models.dart';
+import '../repositories/bike_repository.dart';
+import '../repositories/ride_repository.dart';
+import 'share_ride_screen.dart';
+import '../services/ride_tracker.dart';
 import '../theme.dart';
 import '../widgets/tracked_route_map.dart';
 import '../widgets/ui.dart';
@@ -11,16 +15,6 @@ import '../widgets/ui.dart';
 enum RideStatus { idle, riding, paused, done }
 
 const privacyOpts = ['Public', 'Followers', 'Private'];
-
-double haversineKm(double lat1, double lon1, double lat2, double lon2) {
-  const r = 6371.0;
-  double toR(double d) => d * math.pi / 180;
-  final dLat = toR(lat2 - lat1);
-  final dLon = toR(lon2 - lon1);
-  final h = math.sin(dLat / 2) * math.sin(dLat / 2) +
-      math.cos(toR(lat1)) * math.cos(toR(lat2)) * math.sin(dLon / 2) * math.sin(dLon / 2);
-  return 2 * r * math.asin(math.sqrt(h));
-}
 
 String fmt(int s) {
   final h = (s ~/ 3600).toString().padLeft(2, '0');
@@ -38,227 +32,274 @@ class RecordScreen extends StatefulWidget {
 
 class _RecordScreenState extends State<RecordScreen> {
   RideStatus status = RideStatus.idle;
+
+  /// Wall-clock time while recording (pauses excluded); moving time comes
+  /// from the tracker and also excludes stops.
   int secs = 0;
-  double km = 0;
-  int speed = 0;
-  int top = 0;
   String gps = 'Searching GPS…';
-  late String bike;
   String privacy = 'Followers';
-  Position? last;
-  final List<LatLng> track = [];
+  final _tracker = RideTracker();
+  DateTime? _startedAt;
   StreamSubscription<Position>? watch;
+  bool _backgroundStream = false;
   Timer? ticker;
 
-  static const _maxAccuracyM = 40.0;
-  static const _minPointGapKm = 0.005;
+  /// Rides shorter than this (accidental START/FINISH) aren't auto-saved.
+  static const _minAutoSaveKm = 0.05;
+
+  bool _saving = false;
+  PendingRide? _saved;
+  String? _saveError;
+  List<BikeRecord> _bikes = [];
+  String? _bikeId;
+
+  BikeRecord? get _bike => _bikes.where((b) => b.id == _bikeId).firstOrNull;
 
   @override
   void initState() {
     super.initState();
-    bike = me.bikes.first.name;
-    print('inside indittt');
+    _loadBikes();
     _startGps();
   }
 
-
-  Future<void> _startGps() async {
-    print('========== GPS DEBUG START ==========');
-
+  Future<void> _loadBikes() async {
     try {
-      print('1. Before isLocationServiceEnabled');
-
-      final enabled = await Geolocator.isLocationServiceEnabled()
-          .timeout(const Duration(seconds: 5));
-
-      print('2. isLocationServiceEnabled returned: $enabled');
-
-      if (!enabled) {
-        print('3. LOCATION SERVICE IS DISABLED');
-
-        if (mounted) {
-          setState(() => gps = 'GPS unavailable');
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null) return;
+      final bikes = await BikeRepository().listForUser(uid);
+      if (!mounted) return;
+      setState(() {
+        _bikes = bikes;
+        if (_bike == null && bikes.isNotEmpty) {
+          _bikeId = bikes
+              .firstWhere((b) => b.isPrimary, orElse: () => bikes.first)
+              .id;
         }
-
-        return;
-      }
-
-      print('4. Before checkPermission');
-
-      var permission = await Geolocator.checkPermission()
-          .timeout(const Duration(seconds: 5));
-
-      print('5. checkPermission returned: $permission');
-      print('6. permission.toString(): ${permission.toString()}');
-
-      if (permission == LocationPermission.denied) {
-        print('7. Permission denied - requesting permission');
-
-        permission = await Geolocator.requestPermission()
-            .timeout(const Duration(seconds: 15));
-
-        print('8. requestPermission returned: $permission');
-      }
-
-      if (permission == LocationPermission.denied) {
-        print('9. Permission STILL denied');
-        return;
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        print('10. Permission denied forever');
-        return;
-      }
-
-      print('11. PERMISSION GRANTED');
-
-      print('12. Creating position stream');
-
-      watch = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          distanceFilter: 0,
-        ),
-      ).listen(
-            (p) {
-          print(
-            '13. POSITION: ${p.latitude}, ${p.longitude}, '
-                'accuracy=${p.accuracy}, speed=${p.speed}',
-          );
-
-          if (!mounted) return;
-
-          setState(() {
-            gps = 'GPS locked · ±${p.accuracy.round()} m';
-
-            final raw = p.speed;
-            final mps = (raw.isNaN || raw < 0) ? 0.0 : raw;
-            final kmh = (mps * 3.6).round();
-
-            speed = kmh;
-            top = math.max(top, kmh);
-
-            if (status == RideStatus.riding && last != null) {
-              km += haversineKm(
-                last!.latitude,
-                last!.longitude,
-                p.latitude,
-                p.longitude,
-              );
-            }
-            last = p;
-            _maybeAppendTrack(p);
-          });
-        },
-        onError: (error, stack) {
-          print('14. POSITION STREAM ERROR: $error');
-          print('15. STACK: $stack');
-
-          if (mounted) {
-            setState(() => gps = 'Location error');
-          }
-        },
-      );
-
-      print('16. Position stream created successfully');
-    } catch (e, stack) {
-      print('!!!!!!!! GPS EXCEPTION !!!!!!!!');
-      print('ERROR: $e');
-      print('ERROR TYPE: ${e.runtimeType}');
-      print('STACK: $stack');
-      print('!!!!!!!! END GPS EXCEPTION !!!!!!!!');
-
-      if (mounted) {
-        setState(() => gps = 'GPS error: $e');
-      }
+      });
+    } catch (_) {
+      // Offline: the ride is credited to the primary bike when it syncs.
     }
   }
 
-  // Future<void> _startGps() async {
-  //   print('start gpts called');
-  //   final enabled = await Geolocator.isLocationServiceEnabled();
-  //   if (!enabled) {
-  //     if (mounted) setState(() => gps = 'GPS unavailable');
-  //     return;
-  //   }
-  //   var permission = await Geolocator.checkPermission();
-  //   print('this is the value of the permission');
-  //   print(permission.toString());
-  //   permission = await Geolocator.requestPermission();
-  //   print('after the req');
-  //   if (permission == LocationPermission.denied) {
-  //     permission = await Geolocator.requestPermission();
-  //   }
-  //   if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
-  //     if (mounted) setState(() => gps = 'Allow location to track');
-  //     return;
-  //   }
-  //   watch = Geolocator.getPositionStream(
-  //     locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 0),
-  //   ).listen(
-  //     (p) {
-  //       if (!mounted) return;
-  //       setState(() {
-  //         gps = 'GPS locked · ±${p.accuracy.round()} m';
-  //         final raw = p.speed;
-  //         final mps = (raw.isNaN || raw < 0) ? 0.0 : raw;
-  //         final kmh = (mps * 3.6).round();
-  //         speed = kmh;
-  //         top = math.max(top, kmh);
-  //         if (status == RideStatus.riding && last != null) {
-  //           km += haversineKm(last!.latitude, last!.longitude, p.latitude, p.longitude);
-  //         }
-  //         last = p;
-  //         _maybeAppendTrack(p);
-  //       });
-  //     },
-  //     onError: (_) {
-  //       if (mounted) setState(() => gps = 'Allow location to track');
-  //     },
-  //   );
-  // }
+  /// Called automatically on FINISH: the ride goes to the device first and
+  /// then to the rider's account (or syncs later if offline).
+  Future<void> _saveRide() async {
+    if (_saving || _saved != null) return;
+    setState(() {
+      _saving = true;
+      _saveError = null;
+    });
 
+    final t = _tracker;
+    final km = t.distanceKm;
+    // If GPS never produced a moving segment, fall back to the clock.
+    final moving = t.movingSecs > 0 ? t.movingSecs.round() : secs;
 
-
-  void _maybeAppendTrack(Position p, {bool force = false}) {
-    if (status != RideStatus.riding && !force) return;
-    if (!force && p.accuracy.isFinite && p.accuracy > _maxAccuracyM) return;
-    final point = LatLng(p.latitude, p.longitude);
-    if (track.isNotEmpty) {
-      final prev = track.last;
-      final gapKm = haversineKm(prev.latitude, prev.longitude, point.latitude, point.longitude);
-      if (gapKm == 0) return;
-      if (!force && gapKm < _minPointGapKm) return;
+    try {
+      final saved = await RideRepository().shareRide(
+        title: 'Ride · ${km.toStringAsFixed(1)} km',
+        visibility: RideVisibility.fromLabel(privacy),
+        distanceKm: double.parse(km.toStringAsFixed(3)),
+        movingTimeSecs: moving,
+        avgSpeedKmh: moving > 0 ? km / (moving / 3600) : 0,
+        maxSpeedKmh: t.maxSpeedKmh,
+        elevationM: t.elevationGainM.roundToDouble(),
+        bikeId: _bike?.id,
+        bikeName: _bike?.name ?? '',
+        points: List.of(t.points),
+        startedAt: _startedAt,
+        endedAt: DateTime.now(),
+      );
+      if (!mounted) return;
+      setState(() => _saved = saved);
+      _loadBikes(); // refresh ridden km
+    } catch (e) {
+      if (mounted) setState(() => _saveError = 'Couldn\'t save ride: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
-    track.add(point);
+  }
+
+  Future<void> _deleteRide() async {
+    final saved = _saved;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete this ride?'),
+        content: const Text('It will be removed from your profile and stats.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    if (saved == null) {
+      _reset();
+      return;
+    }
+    try {
+      await RideRepository().deleteSavedRide(saved);
+      _loadBikes();
+      if (mounted) _reset();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('Couldn\'t delete — try again when online ($e)')),
+      );
+    }
+  }
+
+  void _openShare() {
+    final saved = _saved;
+    if (saved == null) return;
+    final uid = Supabase.instance.client.auth.currentUser?.id ?? '';
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => ShareRideScreen(
+        item: FeedItem(
+          ride: saved.toRecord(),
+          rider: Profile(id: uid),
+          bikeName: _bike?.name,
+          bikePhotoUrl: _bike?.photoUrl,
+          points: saved.points,
+          pending: !saved.synced,
+        ),
+      ),
+    ));
+  }
+
+  Future<void> _startGps() async {
+    try {
+      final enabled = await Geolocator.isLocationServiceEnabled()
+          .timeout(const Duration(seconds: 5));
+      if (!enabled) {
+        if (mounted) setState(() => gps = 'GPS unavailable');
+        return;
+      }
+
+      var permission = await Geolocator.checkPermission()
+          .timeout(const Duration(seconds: 5));
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission()
+            .timeout(const Duration(seconds: 15));
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (mounted) setState(() => gps = 'Allow location to track');
+        return;
+      }
+
+      _listen(background: false);
+    } catch (e) {
+      debugPrint('GPS start failed: $e');
+      if (mounted) setState(() => gps = 'GPS error');
+    }
+  }
+
+  /// While a ride is in progress the stream keeps running with the screen
+  /// off / phone in a pocket (Android foreground service, iOS background
+  /// location). Otherwise it's foreground-only.
+  LocationSettings _settings({required bool background}) {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return AndroidSettings(
+          accuracy: LocationAccuracy.best,
+          distanceFilter: 0,
+          intervalDuration: const Duration(seconds: 1),
+          foregroundNotificationConfig: background
+              ? const ForegroundNotificationConfig(
+                  notificationTitle: 'Recording ride',
+                  notificationText: 'Throttle is tracking your ride',
+                  notificationChannelName: 'Ride recording',
+                  enableWakeLock: true,
+                  setOngoing: true,
+                )
+              : null,
+        );
+      case TargetPlatform.iOS:
+        return AppleSettings(
+          accuracy: LocationAccuracy.bestForNavigation,
+          activityType: ActivityType.automotiveNavigation,
+          distanceFilter: 0,
+          pauseLocationUpdatesAutomatically: false,
+          allowBackgroundLocationUpdates: background,
+          showBackgroundLocationIndicator: background,
+        );
+      default:
+        return const LocationSettings(
+          accuracy: LocationAccuracy.best,
+          distanceFilter: 0,
+        );
+    }
+  }
+
+  void _listen({required bool background}) {
+    if (watch != null && _backgroundStream == background) return;
+    watch?.cancel();
+    _backgroundStream = background;
+    watch = Geolocator.getPositionStream(
+      locationSettings: _settings(background: background),
+    ).listen(
+      (p) {
+        if (!mounted) return;
+        setState(() {
+          gps = 'GPS locked · ±${p.accuracy.round()} m';
+          _tracker.addFix(GpsFix(
+            lat: p.latitude,
+            lng: p.longitude,
+            time: p.timestamp,
+            accuracyM: p.accuracy,
+            speedMps: p.speed,
+            speedAccuracyMps: p.speedAccuracy,
+            altitudeM: p.altitude,
+            altitudeAccuracyM: p.altitudeAccuracy,
+          ));
+        });
+      },
+      onError: (Object error) {
+        debugPrint('Position stream error: $error');
+        if (mounted) setState(() => gps = 'Location error');
+      },
+    );
   }
 
   void _setStatus(RideStatus next) {
     ticker?.cancel();
     setState(() {
+      if (next == RideStatus.riding) {
+        _startedAt ??= DateTime.now();
+        _tracker.start();
+      } else {
+        _tracker.pause();
+      }
       status = next;
-      if (next == RideStatus.riding && last != null) {
-        _maybeAppendTrack(last!, force: track.isEmpty);
-      }
-      if (next == RideStatus.done && last != null) {
-        _maybeAppendTrack(last!, force: true);
-      }
     });
     if (next == RideStatus.riding) {
+      _listen(background: true);
       ticker = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() => secs += 1);
       });
+    } else if (next == RideStatus.done) {
+      _listen(background: false);
+      if (km >= _minAutoSaveKm) _saveRide();
     }
   }
 
   void _reset() {
     ticker?.cancel();
+    _listen(background: false);
     setState(() {
       status = RideStatus.idle;
       secs = 0;
-      km = 0;
-      top = 0;
-      track.clear();
+      _startedAt = null;
+      _saved = null;
+      _saveError = null;
+      _tracker.reset();
     });
   }
 
@@ -269,7 +310,46 @@ class _RecordScreenState extends State<RecordScreen> {
     super.dispose();
   }
 
-  int get avg => secs > 0 ? (km / (secs / 3600)).round() : 0;
+  Widget _saveStatus() {
+    IconData icon = Icons.info_outline;
+    var color = AppColors.mutedForeground;
+    var text =
+        'Too short to save automatically (under ${(_minAutoSaveKm * 1000).round()} m)';
+    if (_saving) {
+      text = 'Saving to your profile…';
+    } else if (_saveError != null) {
+      icon = Icons.error_outline;
+      color = Colors.redAccent;
+      text = _saveError!;
+    } else if (_saved?.synced == true) {
+      icon = Icons.check_circle;
+      color = AppColors.primary;
+      text = 'Saved to your profile';
+    } else if (_saved != null) {
+      icon = Icons.cloud_off_outlined;
+      color = AppColors.primary;
+      text = 'Saved on this phone — adds to your profile when you\'re online';
+    }
+    return Row(
+      children: [
+        _saving
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2))
+            : Icon(icon, size: 16, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+            child: Text(text, style: TextStyle(fontSize: 13, color: color))),
+      ],
+    );
+  }
+
+  double get km => _tracker.distanceKm;
+  int get speed => _tracker.currentSpeedKmh.round();
+  int get top => _tracker.maxSpeedKmh.round();
+  int get movingSecs => _tracker.movingSecs.round();
+  int get avg => _tracker.avgSpeedKmh.round();
 
   @override
   Widget build(BuildContext context) {
@@ -289,7 +369,7 @@ class _RecordScreenState extends State<RecordScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      TrackedRouteMap(points: List<LatLng>.from(track), height: 220),
+                      TrackedRouteMap.track(_tracker.points, height: 220),
                       Padding(
                         padding: const EdgeInsets.all(16),
                         child: Wrap(
@@ -297,50 +377,123 @@ class _RecordScreenState extends State<RecordScreen> {
                           children: [
                             SizedBox(
                               width: MediaQuery.sizeOf(context).width / 2 - 32,
-                              child: StatBlock(value: km.toStringAsFixed(1), label: 'km', valueSize: 30),
+                              child: StatBlock(
+                                  value: km.toStringAsFixed(2),
+                                  label: 'km',
+                                  valueSize: 30),
                             ),
                             SizedBox(
                               width: MediaQuery.sizeOf(context).width / 2 - 32,
-                              child: StatBlock(value: fmt(secs), label: 'moving time', valueSize: 30),
+                              child: StatBlock(
+                                  value: fmt(movingSecs),
+                                  label: 'moving time',
+                                  valueSize: 30),
                             ),
                             SizedBox(
                               width: MediaQuery.sizeOf(context).width / 2 - 32,
-                              child: StatBlock(value: '$avg', label: 'avg km/h', valueSize: 30),
+                              child: StatBlock(
+                                  value: '$avg',
+                                  label: 'avg km/h',
+                                  valueSize: 30),
                             ),
                             SizedBox(
                               width: MediaQuery.sizeOf(context).width / 2 - 32,
-                              child: StatBlock(value: '$top', label: 'top km/h', valueSize: 30),
+                              child: StatBlock(
+                                  value: '$top',
+                                  label: 'top km/h',
+                                  valueSize: 30),
                             ),
                           ],
                         ),
                       ),
                       Container(
                         width: double.infinity,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 12),
                         decoration: const BoxDecoration(
-                          border: Border(top: BorderSide(color: AppColors.border)),
+                          border:
+                              Border(top: BorderSide(color: AppColors.border)),
                         ),
-                        child: Text('$bike · $privacy', style: monoStyle(size: 11, tracking: 0)),
+                        child: Text(
+                          [
+                            if (_bike != null) _bike!.name,
+                            privacy,
+                            '${_tracker.elevationGainM.round()} m climbed',
+                            'elapsed ${fmt(secs)}',
+                          ].join(' · '),
+                          style: monoStyle(size: 11, tracking: 0),
+                        ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  height: 56,
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: _reset,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                const SizedBox(height: 12),
+                _saveStatus(),
+                const SizedBox(height: 12),
+                if (_saved != null) ...[
+                  SizedBox(
+                    height: 56,
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _openShare,
+                      icon: const Icon(Icons.ios_share),
+                      label: Text(
+                        'SHARE AS IMAGE',
+                        style: displayStyle(
+                            size: 20, color: AppColors.primaryForeground),
+                      ),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
+                      ),
                     ),
-                    child: Text('SHARE RIDE', style: displayStyle(size: 20, color: AppColors.primaryForeground)),
                   ),
-                ),
-                TextButton(
-                  onPressed: _reset,
-                  child: const Text('Discard', style: TextStyle(fontSize: 14, color: AppColors.mutedForeground)),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 48,
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: _reset,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.foreground,
+                        side: const BorderSide(color: AppColors.border),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
+                      ),
+                      child: const Text('Done',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ] else if (!_saving)
+                  SizedBox(
+                    height: 56,
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: _saveRide,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
+                      ),
+                      child: Text(
+                        _saveError != null ? 'RETRY SAVE' : 'SAVE ANYWAY',
+                        style: displayStyle(
+                            size: 20, color: AppColors.primaryForeground),
+                      ),
+                    ),
+                  ),
+                Center(
+                  child: TextButton(
+                    onPressed: _saving
+                        ? null
+                        : (_saved != null ? _deleteRide : _reset),
+                    child: Text(
+                      _saved != null ? 'Delete ride' : 'Discard',
+                      style: const TextStyle(
+                          fontSize: 14, color: AppColors.mutedForeground),
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -383,7 +536,10 @@ class _RecordScreenState extends State<RecordScreen> {
                   TextSpan(
                     children: [
                       TextSpan(text: '$speed', style: displayStyle(size: 88)),
-                      TextSpan(text: ' km/h', style: displayStyle(size: 18, color: AppColors.mutedForeground)),
+                      TextSpan(
+                          text: ' km/h',
+                          style: displayStyle(
+                              size: 18, color: AppColors.mutedForeground)),
                     ],
                   ),
                   textAlign: TextAlign.center,
@@ -391,7 +547,9 @@ class _RecordScreenState extends State<RecordScreen> {
                 const SizedBox(height: 20),
                 Row(
                   children: [
-                    Expanded(child: _Cell(v: km.toStringAsFixed(1), u: 'km', l: 'Distance')),
+                    Expanded(
+                        child: _Cell(
+                            v: km.toStringAsFixed(2), u: 'km', l: 'Distance')),
                     const SizedBox(width: 12),
                     Expanded(child: _Cell(v: fmt(secs), u: '', l: 'Time')),
                     const SizedBox(width: 12),
@@ -409,7 +567,9 @@ class _RecordScreenState extends State<RecordScreen> {
                         color: AppColors.primary,
                         borderRadius: BorderRadius.circular(16),
                       ),
-                      child: Text('START', style: displayStyle(size: 24, color: AppColors.primaryForeground)),
+                      child: Text('START',
+                          style: displayStyle(
+                              size: 24, color: AppColors.primaryForeground)),
                     ),
                   )
                 else
@@ -420,12 +580,15 @@ class _RecordScreenState extends State<RecordScreen> {
                           height: 64,
                           child: FilledButton(
                             onPressed: () => _setStatus(
-                              status == RideStatus.riding ? RideStatus.paused : RideStatus.riding,
+                              status == RideStatus.riding
+                                  ? RideStatus.paused
+                                  : RideStatus.riding,
                             ),
                             style: FilledButton.styleFrom(
                               backgroundColor: AppColors.secondary,
                               foregroundColor: AppColors.foreground,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16)),
                             ),
                             child: Text(
                               status == RideStatus.riding ? 'PAUSE' : 'RESUME',
@@ -443,9 +606,12 @@ class _RecordScreenState extends State<RecordScreen> {
                             style: FilledButton.styleFrom(
                               backgroundColor: AppColors.foreground,
                               foregroundColor: AppColors.background,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16)),
                             ),
-                            child: Text('FINISH', style: displayStyle(size: 20, color: AppColors.background)),
+                            child: Text('FINISH',
+                                style: displayStyle(
+                                    size: 20, color: AppColors.background)),
                           ),
                         ),
                       ),
@@ -457,12 +623,24 @@ class _RecordScreenState extends State<RecordScreen> {
         ),
         if (status == RideStatus.idle) ...[
           const SizedBox(height: 16),
-          _Picker(
-            label: 'Motorcycle',
-            options: me.bikes.map((b) => b.name).toList(),
-            value: bike,
-            onChange: (v) => setState(() => bike = v),
-          ),
+          if (_bikes.isNotEmpty)
+            _Picker(
+              label: 'Motorcycle',
+              options: [for (final b in _bikes) b.name],
+              value: _bike?.name ?? '',
+              onChange: (name) => setState(() {
+                _bikeId = _bikes.firstWhere((b) => b.name == name).id;
+              }),
+            )
+          else
+            const AppCard(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'No bike loaded — this ride will count toward your primary bike.',
+                style:
+                    TextStyle(fontSize: 13, color: AppColors.mutedForeground),
+              ),
+            ),
           const SizedBox(height: 12),
           _Picker(
             label: 'Privacy',
@@ -478,7 +656,9 @@ class _RecordScreenState extends State<RecordScreen> {
               children: [
                 const LabelMono('Route'),
                 const SizedBox(height: 4),
-                const Text('No route selected', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                const Text('No route selected',
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               ],
             ),
           ),
@@ -513,7 +693,11 @@ class _Cell extends StatelessWidget {
             TextSpan(
               children: [
                 TextSpan(text: v, style: displayStyle(size: 20)),
-                if (u.isNotEmpty) TextSpan(text: ' $u', style: displayStyle(size: 12, color: AppColors.mutedForeground)),
+                if (u.isNotEmpty)
+                  TextSpan(
+                      text: ' $u',
+                      style: displayStyle(
+                          size: 12, color: AppColors.mutedForeground)),
               ],
             ),
           ),
@@ -553,12 +737,15 @@ class _Picker extends StatelessWidget {
               return GestureDetector(
                 onTap: () => onChange(o),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: on ? AppColors.accent : Colors.transparent,
                     borderRadius: BorderRadius.circular(999),
                     border: Border.all(
-                      color: on ? AppColors.primary.withValues(alpha: 0.4) : AppColors.border,
+                      color: on
+                          ? AppColors.primary.withValues(alpha: 0.4)
+                          : AppColors.border,
                     ),
                   ),
                   child: Text(
@@ -566,7 +753,9 @@ class _Picker extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: on ? AppColors.accentForeground : AppColors.mutedForeground,
+                      color: on
+                          ? AppColors.accentForeground
+                          : AppColors.mutedForeground,
                     ),
                   ),
                 ),

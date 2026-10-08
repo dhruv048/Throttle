@@ -29,7 +29,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           child: Column(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
                 decoration: BoxDecoration(
                   color: AppColors.card,
                   borderRadius: BorderRadius.circular(12),
@@ -37,14 +38,16 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.search, size: 16, color: AppColors.mutedForeground),
+                    const Icon(Icons.search,
+                        size: 16, color: AppColors.mutedForeground),
                     const SizedBox(width: 8),
                     Expanded(
                       child: TextField(
                         onChanged: (v) => setState(() => q = v),
                         decoration: const InputDecoration(
                           hintText: 'Search roads, riders, clubs',
-                          hintStyle: TextStyle(fontSize: 14, color: AppColors.mutedForeground),
+                          hintStyle: TextStyle(
+                              fontSize: 14, color: AppColors.mutedForeground),
                           border: InputBorder.none,
                           isDense: true,
                         ),
@@ -63,18 +66,23 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                     child: GestureDetector(
                       onTap: () => setState(() => tab = t),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 6),
                         decoration: BoxDecoration(
                           color: on ? AppColors.foreground : AppColors.card,
                           borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: on ? AppColors.foreground : AppColors.border),
+                          border: Border.all(
+                              color:
+                                  on ? AppColors.foreground : AppColors.border),
                         ),
                         child: Text(
                           t.toUpperCase(),
                           style: monoStyle(
                             size: 11,
                             tracking: 1.32,
-                            color: on ? AppColors.background : AppColors.mutedForeground,
+                            color: on
+                                ? AppColors.background
+                                : AppColors.mutedForeground,
                           ),
                         ),
                       ),
@@ -93,7 +101,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
               border: Border.all(color: AppColors.border),
             ),
             clipBehavior: Clip.antiAlias,
-            child: const RouteMap(seed: 21, height: 176, label: 'Heatmap · last 30 days'),
+            child: const RouteMap(
+                seed: 21, height: 176, label: 'Heatmap · last 30 days'),
           ),
         ),
         Padding(
@@ -125,11 +134,16 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                                   children: [
                                     Text(r.name, style: displayStyle(size: 18)),
                                     const SizedBox(height: 4),
-                                    Text('${r.km} km · ${r.time}', style: monoStyle(size: 11, tracking: 0)),
+                                    Text('${r.km} km · ${r.time}',
+                                        style:
+                                            monoStyle(size: 11, tracking: 0)),
                                     const SizedBox(height: 4),
                                     Text(
                                       '${r.riders} riders · ${r.difficulty}',
-                                      style: monoStyle(size: 11, tracking: 0, color: AppColors.primary),
+                                      style: monoStyle(
+                                          size: 11,
+                                          tracking: 0,
+                                          color: AppColors.primary),
                                     ),
                                   ],
                                 ),
@@ -200,7 +214,9 @@ class _FollowRowState extends State<FollowRow> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(widget.name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  Text(widget.name,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
                   Text(widget.sub, style: monoStyle(size: 11, tracking: 0)),
                 ],
               ),
@@ -208,7 +224,8 @@ class _FollowRowState extends State<FollowRow> {
             GestureDetector(
               onTap: () => setState(() => on = !on),
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: on ? AppColors.secondary : AppColors.primary,
                   borderRadius: BorderRadius.circular(8),
@@ -218,7 +235,8 @@ class _FollowRowState extends State<FollowRow> {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: on ? AppColors.foreground : AppColors.primaryForeground,
+                    color:
+                        on ? AppColors.foreground : AppColors.primaryForeground,
                   ),
                 ),
               ),

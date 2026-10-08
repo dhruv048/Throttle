@@ -16,3 +16,7 @@ ios/Pods/
 ios/.symlinks/
 ios/Flutter/Flutter.framework
 ios/Flutter/Flutter.podspec
+lib/config/env.dart
+.env
+.env.*
+!.env.example

@@ -64,9 +64,12 @@ class _RiseInState extends State<RiseIn> with SingleTickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
-    _opacity = CurvedAnimation(parent: _c, curve: const Cubic(0.32, 0.72, 0, 1));
-    _offset = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero).animate(_opacity);
+    _c = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 500));
+    _opacity =
+        CurvedAnimation(parent: _c, curve: const Cubic(0.32, 0.72, 0, 1));
+    _offset = Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
+        .animate(_opacity);
     Future<void>.delayed(widget.delay, () {
       if (mounted) _c.forward();
     });
@@ -109,7 +112,9 @@ class AppCard extends StatelessWidget {
         color: AppColors.card,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: highlight ? AppColors.primary.withValues(alpha: 0.4) : AppColors.border,
+          color: highlight
+              ? AppColors.primary.withValues(alpha: 0.4)
+              : AppColors.border,
         ),
         boxShadow: [
           BoxShadow(
@@ -138,7 +143,11 @@ class LabelMono extends StatelessWidget {
 }
 
 class StatBlock extends StatelessWidget {
-  const StatBlock({super.key, required this.value, required this.label, this.valueSize = 24});
+  const StatBlock(
+      {super.key,
+      required this.value,
+      required this.label,
+      this.valueSize = 24});
 
   final String value;
   final String label;
@@ -166,13 +175,16 @@ class BlinkDot extends StatefulWidget {
   State<BlinkDot> createState() => _BlinkDotState();
 }
 
-class _BlinkDotState extends State<BlinkDot> with SingleTickerProviderStateMixin {
+class _BlinkDotState extends State<BlinkDot>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _c;
 
   @override
   void initState() {
     super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400))..repeat(reverse: true);
+    _c = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1400))
+      ..repeat(reverse: true);
   }
 
   @override
@@ -188,7 +200,8 @@ class _BlinkDotState extends State<BlinkDot> with SingleTickerProviderStateMixin
       child: Container(
         width: widget.size,
         height: widget.size,
-        decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
+        decoration: const BoxDecoration(
+            color: AppColors.primary, shape: BoxShape.circle),
       ),
     );
   }
@@ -225,13 +238,16 @@ class _SheenSweep extends StatefulWidget {
   State<_SheenSweep> createState() => _SheenSweepState();
 }
 
-class _SheenSweepState extends State<_SheenSweep> with SingleTickerProviderStateMixin {
+class _SheenSweepState extends State<_SheenSweep>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _c;
 
   @override
   void initState() {
     super.initState();
-    _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 3200))..repeat();
+    _c = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 3200))
+      ..repeat();
   }
 
   @override
@@ -253,7 +269,11 @@ class _SheenSweepState extends State<_SheenSweep> with SingleTickerProviderState
             child: const DecoratedBox(
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [Colors.transparent, Color(0x59FFFFFF), Colors.transparent],
+                  colors: [
+                    Colors.transparent,
+                    Color(0x59FFFFFF),
+                    Colors.transparent
+                  ],
                 ),
               ),
             ),

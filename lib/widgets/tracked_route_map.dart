@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import '../models/models.dart';
 import '../theme.dart';
 
 class TrackedRouteMap extends StatelessWidget {
@@ -8,16 +9,52 @@ class TrackedRouteMap extends StatelessWidget {
     super.key,
     required this.points,
     this.height = 220,
+    this.interactive = true,
+    this.fitPadding,
   });
+
+  /// Map for a saved ride's track (downsampled for long rides).
+  factory TrackedRouteMap.track(
+    List<TrackPoint> track, {
+    Key? key,
+    double height = 220,
+    bool interactive = true,
+    EdgeInsets? fitPadding,
+  }) {
+    const maxPoints = 400;
+    final step = (track.length / maxPoints).ceil().clamp(1, track.length + 1);
+    final pts = <LatLng>[
+      for (var i = 0; i < track.length; i += step)
+        LatLng(track[i].lat, track[i].lng),
+      if (track.isNotEmpty && (track.length - 1) % step != 0)
+        LatLng(track.last.lat, track.last.lng),
+    ];
+    return TrackedRouteMap(
+      key: key,
+      points: pts,
+      height: height,
+      interactive: interactive,
+      fitPadding: fitPadding,
+    );
+  }
 
   final List<LatLng> points;
   final double height;
+
+  /// False for previews inside scrolling lists, so the list keeps the drag.
+  final bool interactive;
+
+  /// Space to keep clear around the route when fitting the camera, e.g. to
+  /// keep it out from under overlaid text.
+  final EdgeInsets? fitPadding;
 
   static const _interaction = InteractionOptions(
     flags: InteractiveFlag.pinchZoom |
         InteractiveFlag.doubleTapZoom |
         InteractiveFlag.scrollWheelZoom,
   );
+
+  static const _static = InteractionOptions(flags: InteractiveFlag.none);
 
   @override
   Widget build(BuildContext context) {
@@ -45,15 +82,15 @@ class TrackedRouteMap extends StatelessWidget {
             ? MapOptions(
                 initialCenter: points.first,
                 initialZoom: 16,
-                interactionOptions: _interaction,
+                interactionOptions: interactive ? _interaction : _static,
               )
             : MapOptions(
                 initialCameraFit: CameraFit.coordinates(
                   coordinates: points,
-                  padding: const EdgeInsets.all(32),
+                  padding: fitPadding ?? EdgeInsets.all(height < 160 ? 18 : 32),
                   maxZoom: 17,
                 ),
-                interactionOptions: _interaction,
+                interactionOptions: interactive ? _interaction : _static,
               ),
         children: [
           TileLayer(
@@ -88,6 +125,19 @@ class TrackedRouteMap extends StatelessWidget {
                   child: const _Dot(color: Color(0xFFC92A2A)),
                 ),
             ],
+          ),
+          // Required by the OpenStreetMap tile licence.
+          Align(
+            alignment: Alignment.bottomRight,
+            child: Container(
+              margin: const EdgeInsets.all(4),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              color: Colors.white.withValues(alpha: 0.75),
+              child: const Text(
+                '© OpenStreetMap',
+                style: TextStyle(fontSize: 9, color: Color(0xFF555555)),
+              ),
+            ),
           ),
         ],
       ),
