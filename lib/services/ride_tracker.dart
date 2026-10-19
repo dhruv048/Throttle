@@ -150,6 +150,31 @@ class RideTracker {
     points.clear();
   }
 
+  /// The ride so far, to keep on the phone in case the app is closed.
+  Map<String, dynamic> toJson() => {
+        'distanceM': distanceM,
+        'movingSecs': movingSecs,
+        'maxSpeedKmh': maxSpeedKmh,
+        'elevationGainM': elevationGainM,
+        if (_elevRef != null) 'elevRef': _elevRef,
+        'points': [for (final p in points) p.toJson()],
+      };
+
+  /// Picks up a ride saved with [toJson], paused: [start] resumes it.
+  void restore(Map<String, dynamic> json) {
+    reset();
+    double number(String key) => (json[key] as num?)?.toDouble() ?? 0;
+    distanceM = number('distanceM');
+    movingSecs = number('movingSecs');
+    maxSpeedKmh = number('maxSpeedKmh');
+    elevationGainM = number('elevationGainM');
+    _elevRef = (json['elevRef'] as num?)?.toDouble();
+    points.addAll([
+      for (final p in json['points'] as List? ?? const [])
+        TrackPoint.fromJson(Map<String, dynamic>.from(p as Map)),
+    ]);
+  }
+
   void addFix(GpsFix fix) {
     final speedKnown = fix.hasSpeed;
     final v = speedKnown ? fix.speedMps! : 0.0;

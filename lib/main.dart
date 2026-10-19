@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'config/supabase_config.dart';
+import 'providers/core.dart';
+import 'providers/navigation.dart';
 import 'screens/activity_screen.dart';
 import 'screens/auth_gate.dart';
 import 'screens/discover_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/record_screen.dart';
-import 'services/auth_service.dart';
-import 'services/ride_sync_service.dart';
+import 'providers/settings.dart';
 import 'theme.dart';
+import 'units.dart';
 import 'widgets/bottom_nav.dart';
 
 Future<void> main() async {
@@ -29,81 +32,36 @@ Future<void> main() async {
   } else {
     await Supabase.initialize(
       url: SupabaseConfig.url,
-      anonKey: SupabaseConfig.anonKey,
+      publishableKey: SupabaseConfig.anonKey,
       authOptions: const FlutterAuthClientOptions(
         authFlowType: AuthFlowType.pkce,
       ),
     );
   }
 
-  runApp(const ThrottleApp());
+  runApp(const ProviderScope(retry: noRetry, child: ThrottleApp()));
 }
 
-class ThrottleApp extends StatefulWidget {
-  const ThrottleApp({
-    super.key,
-    this.auth,
-    this.sync,
-    this.home,
-  });
+class ThrottleApp extends ConsumerWidget {
+  const ThrottleApp({super.key, this.home});
 
-  final AuthService? auth;
-  final RideSyncService? sync;
+  /// Shown instead of the signed-in app (tests).
   final Widget? home;
 
   @override
-  State<ThrottleApp> createState() => _ThrottleAppState();
-}
-
-class _ThrottleAppState extends State<ThrottleApp> {
-  AuthService? _auth;
-  RideSyncService? _sync;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.home != null) return;
-    if (widget.auth != null && widget.sync != null) {
-      _auth = widget.auth;
-      _sync = widget.sync;
-    } else if (SupabaseConfig.isConfigured) {
-      try {
-        _auth = AuthService();
-        _sync = RideSyncService();
-      } catch (e) {
-        debugPrint('Supabase not yet initialized: $e');
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    if (widget.sync == null) {
-      _sync?.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    Widget homeWidget;
-    if (widget.home != null) {
-      homeWidget = widget.home!;
-    } else if (_auth != null && _sync != null) {
-      homeWidget = AuthGate(
-        auth: _auth!,
-        sync: _sync!,
-        child: const Shell(),
-      );
-    } else {
-      homeWidget = const _MissingConfigScreen();
-    }
-
+  Widget build(BuildContext context, WidgetRef ref) {
+    final units = ref.watch(unitsProvider);
     return MaterialApp(
       title: 'Throttle — Ride, record, share',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
-      home: homeWidget,
+      // Km or miles, on every page.
+      builder: (context, child) =>
+          UnitsScope(units: units, child: child ?? const SizedBox.shrink()),
+      home: home ??
+          (SupabaseConfig.isConfigured
+              ? const AuthGate(child: Shell())
+              : const _MissingConfigScreen()),
     );
   }
 }
@@ -136,18 +94,51 @@ class _MissingConfigScreen extends StatelessWidget {
   }
 }
 
-class Shell extends StatefulWidget {
+class Shell extends ConsumerStatefulWidget {
   const Shell({super.key});
 
   @override
-  State<Shell> createState() => _ShellState();
+  ConsumerState<Shell> createState() => _ShellState();
 }
 
-class _ShellState extends State<Shell> {
-  int index = 0;
+class _ShellState extends ConsumerState<Shell> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Back from the background: the visible tab refreshes.
+    if (state == AppLifecycleState.resumed) {
+      _refresh(ref.read(currentTabProvider));
+    }
+  }
+
+  Future<void> _refresh(AppTab tab) => switch (tab) {
+        AppTab.home => HomeScreen.refresh(ref),
+        AppTab.discover => DiscoverScreen.refresh(ref),
+        // Nothing to reload; GPS follows the tab by itself.
+        AppTab.record => Future.value(),
+        AppTab.activity => ActivityScreen.refresh(ref),
+        AppTab.profile => ProfileScreen.refresh(ref),
+      };
 
   @override
   Widget build(BuildContext context) {
+    final tab = ref.watch(currentTabProvider);
+    // Every tab stays alive in the IndexedStack, and refreshes when it comes
+    // on screen.
+    ref.listen(currentTabProvider, (previous, next) {
+      if (next != previous) _refresh(next);
+    });
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Center(
@@ -159,23 +150,22 @@ class _ShellState extends State<Shell> {
                 child: SafeArea(
                   bottom: false,
                   child: IndexedStack(
-                    index: index,
-                    children: [
-                      HomeScreen(
-                        onStartRide: () => setState(() => index = 2),
-                        onViewRoute: () => setState(() => index = 1),
-                      ),
-                      const DiscoverScreen(),
-                      const RecordScreen(),
-                      const ActivityScreen(),
-                      const ProfileScreen(),
+                    index: tab.index,
+                    children: const [
+                      HomeScreen(),
+                      DiscoverScreen(),
+                      RecordScreen(),
+                      ActivityScreen(),
+                      ProfileScreen(),
                     ],
                   ),
                 ),
               ),
               ThrottleBottomNav(
-                index: index,
-                onChanged: (i) => setState(() => index = i),
+                index: tab.index,
+                onChanged: (i) => ref
+                    .read(currentTabProvider.notifier)
+                    .show(AppTab.values[i]),
               ),
             ],
           ),

@@ -1,19 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../services/auth_service.dart';
+import '../../providers/core.dart';
 import '../../theme.dart';
 import '../../widgets/ui.dart';
 
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key, required this.auth});
-
-  final AuthService auth;
+class LoginScreen extends ConsumerStatefulWidget {
+  const LoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _busy = false;
   String? _error;
 
@@ -23,7 +22,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
     try {
-      await widget.auth.signInWithGoogle();
+      await ref.read(authServiceProvider).signInWithGoogle();
     } catch (e) {
       if (mounted) {
         setState(() => _error = e.toString());

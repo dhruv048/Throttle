@@ -1,102 +1,54 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../data.dart';
+import '../format.dart';
 import '../models/models.dart';
-import '../repositories/bike_repository.dart';
-import '../repositories/profile_repository.dart';
-import '../repositories/ride_repository.dart';
-import '../services/ride_events.dart';
+import '../providers/core.dart';
+import '../providers/navigation.dart';
+import '../providers/rider.dart';
+import '../providers/rides.dart';
+import '../providers/settings.dart';
 import '../theme.dart';
+import '../widgets/bike_chooser.dart';
 import '../widgets/bike_form_sheet.dart';
-import '../widgets/ride_card.dart';
+import '../widgets/profile_tabs.dart';
 import '../widgets/rider_avatar.dart';
+import '../widgets/skeleton.dart';
 import '../widgets/ui.dart';
+import '../units.dart';
 
-class ProfileScreen extends StatefulWidget {
+/// The signed-in rider's own profile: who they are, their counts and
+/// garage, then their activities, memories and flags, as other riders see
+/// them (plus rides still on this phone).
+class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
 
+  /// Reloads what Profile shows; it keeps showing the current (real) data
+  /// until the new data arrives.
+  static Future<void> refresh(WidgetRef ref) {
+    final uid = ref.read(currentUserIdProvider);
+    return refreshAll(ref, [
+      myProfileProvider.future,
+      myBikesProvider.future,
+      myRideCountProvider.future,
+      myFollowCountsProvider.future,
+      myPendingRidesProvider.future,
+      myRidesProvider.future,
+      if (uid != null) ...[
+        riderMemoriesProvider(uid).future,
+        riderFlagsProvider(uid).future,
+      ],
+    ]);
+  }
+
   @override
-  State<ProfileScreen> createState() => _ProfileScreenState();
+  ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
 }
 
-class _ProfileScreenState extends State<ProfileScreen> {
-  Profile? _profile;
-  List<BikeRecord> _bikes = [];
-  int? _rideCount;
-  List<FeedItem> _recent = [];
-  int? _followers;
-  int? _following;
-  bool _loading = true;
+class _ProfileScreenState extends ConsumerState<ProfileScreen> {
+  ProfileTab _tab = ProfileTab.activities;
 
-  @override
-  void initState() {
-    super.initState();
-    RideEvents.changed.addListener(_loadData);
-    _loadData();
-  }
-
-  @override
-  void dispose() {
-    RideEvents.changed.removeListener(_loadData);
-    super.dispose();
-  }
-
-  Future<void> _loadData() async {
-    try {
-      final uid = Supabase.instance.client.auth.currentUser?.id;
-      if (uid == null) return;
-      setState(() => _loading = true);
-
-      final profileRepo = ProfileRepository();
-      final bikeRepo = BikeRepository();
-      final rideRepo = RideRepository();
-
-      final results = await Future.wait([
-        profileRepo.getById(uid),
-        bikeRepo.listForUser(uid),
-        rideRepo.countForUser(uid),
-        profileRepo.followCounts(uid),
-        rideRepo.myPendingRides(),
-        rideRepo.myRides(limit: 3),
-      ]);
-
-      if (mounted) {
-        final follows = results[3] as ({int followers, int following});
-        setState(() {
-          _profile = results[0] as Profile?;
-          _bikes = results[1] as List<BikeRecord>;
-          _rideCount =
-              (results[2] as int) + (results[4] as List<PendingRide>).length;
-          _followers = follows.followers;
-          _following = follows.following;
-          final me = _profile ?? Profile(id: uid);
-          final uploaded = [
-            for (final f in results[5] as List<FeedItem>) f.ride.localId,
-          ].whereType<String>().toSet();
-          _recent = [
-            for (final p in results[4] as List<PendingRide>)
-              if (!uploaded.contains(p.localId))
-                FeedItem(
-                  ride: p.toRecord(),
-                  rider: me,
-                  bikeName: p.bikeName,
-                  points: p.points,
-                  pending: true,
-                ),
-            ...results[5] as List<FeedItem>,
-          ].take(3).toList();
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _signOut(BuildContext context) async {
+  Future<void> _signOut() async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -112,238 +64,359 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
     if (confirmed == true) {
-      await Supabase.instance.client.auth.signOut();
+      await ref.read(supabaseClientProvider).auth.signOut();
     }
   }
 
-  Future<void> _editBike([BikeRecord? bike]) async {
-    final saved = await showBikeFormSheet(
-      context,
-      bike: bike,
-      defaultPrimary: _bikes.isEmpty,
-    );
-    if (saved) await _loadData();
+  void _loadMore(String? uid) {
+    switch (_tab) {
+      case ProfileTab.activities:
+        ref.read(myRidesProvider.notifier).loadMore();
+      case ProfileTab.memories:
+        if (uid != null) {
+          ref.read(riderMemoriesProvider(uid).notifier).loadMore();
+        }
+      case ProfileTab.flags || ProfileTab.garage:
+        break;
+    }
   }
+
+  /// The rider's own profile: their flags are on Home.
+  static const _tabs = [
+    ProfileTab.activities,
+    ProfileTab.memories,
+    ProfileTab.garage,
+  ];
 
   @override
   Widget build(BuildContext context) {
-    final displayName = _profile?.displayName ?? _profile?.username ?? '';
-    final initials = _profile?.initials ?? '';
-    final subtitle = [
-      if (_profile?.city?.isNotEmpty == true) _profile!.city!,
-      if (_profile?.username != null) '@${_profile!.username}',
-    ].join(' · ');
+    final profileState = ref.watch(myProfileProvider);
+    final bikesState = ref.watch(myBikesProvider);
+    final countState = ref.watch(myRideCountProvider);
+    final followsState = ref.watch(myFollowCountsProvider);
+    final pendingState = ref.watch(myPendingRidesProvider);
+    final ridesState = ref.watch(myRidesProvider);
+    final uid = ref.watch(currentUserIdProvider);
+
+    final profile = profileState.value;
+    final bikes = bikesState.value;
+    final follows = followsState.value;
+    final pending = pendingState.value;
+    final pages = ridesState.value;
+    final uploaded = pages?.items;
+    final uploadedIds = (uploaded ?? const <FeedItem>[])
+        .map((f) => f.ride.localId)
+        .whereType<String>()
+        .toSet();
+    final unsynced =
+        pending?.where((p) => !uploadedIds.contains(p.localId)).toList();
+    final count = countState.value;
+    final rideCount =
+        count == null || unsynced == null ? null : count + unsynced.length;
+    final me = profile ?? Profile(id: uid ?? '');
+    final rides = uploaded == null || unsynced == null
+        ? null
+        : [
+            for (final p in unsynced)
+              FeedItem(
+                ride: p.toRecord(),
+                rider: me,
+                bikeName: p.bikeName,
+                points: p.points,
+                pending: true,
+              ),
+            ...uploaded,
+          ];
+
+    final loadingProfile = profileState.isLoading && profile == null;
+    final loadingCounts = followsState.isLoading ||
+        countState.isLoading ||
+        pendingState.isLoading;
+    final failed = [
+      profileState,
+      bikesState,
+      countState,
+      followsState,
+      pendingState,
+      ridesState,
+    ].any((state) => state.hasError);
+    final error = !failed
+        ? null
+        : profile == null
+            ? 'Couldn\'t load your profile. Pull down to retry.'
+            : 'Couldn\'t refresh — showing what loaded earlier.';
+
+    // Saving a bike reloads the bikes (and everything showing them).
+    Future<void> editBike([BikeRecord? bike]) => showBikeFormSheet(
+          context,
+          bike: bike,
+          defaultPrimary: bikes?.isEmpty ?? true,
+        );
 
     return RefreshIndicator(
-      onRefresh: _loadData,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-        children: [
-          RiseIn(
-            child: Row(
-              children: [
-                RiderAvatar(initials: initials, size: 64),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(displayName, style: displayStyle(size: 30)),
-                      const SizedBox(height: 4),
-                      Text(subtitle, style: monoStyle(size: 11, tracking: 0)),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  onPressed: () => _signOut(context),
-                  icon: const Icon(Icons.logout, size: 20),
-                  tooltip: 'Sign out',
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-          AppCard(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Row(
-              children: [
-                _col(_count(_followers), 'followers'),
-                _col(_count(_following), 'following'),
-                _col(_count(_rideCount), 'rides'),
-              ],
-            ),
-          ),
-          if (_recent.isNotEmpty) ...[
-            const SizedBox(height: 24),
-            const LabelMono('Recent rides'),
-            const SizedBox(height: 8),
-            for (final item in _recent)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: RideCard(key: ValueKey(item.ride.id), item: item),
-              ),
-            Text('All your rides are in Activity.',
-                style: monoStyle(size: 11, tracking: 0)),
-          ],
-          const SizedBox(height: 24),
-          const LabelMono('Garage'),
-          const SizedBox(height: 8),
-          if (_loading && _bikes.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 16),
-              child: Center(child: CircularProgressIndicator()),
-            ),
-          ..._bikes.map(
-            (b) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: GestureDetector(
-                onTap: () => _editBike(b),
-                child: AppCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (b.photoUrl != null)
-                        AspectRatio(
-                          aspectRatio: 16 / 9,
-                          child: Image.network(
-                            b.photoUrl!,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) =>
-                                const ColoredBox(color: AppColors.panel),
-                          ),
-                        ),
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+      onRefresh: () => ProfileScreen.refresh(ref),
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (n) {
+          if (n.metrics.axis == Axis.vertical && n.metrics.extentAfter < 600) {
+            _loadMore(uid);
+          }
+          return false;
+        },
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+              sliver: SliverList.list(
+                children: [
+                  RiseIn(
+                    child: Row(
+                      children: [
+                        if (loadingProfile)
+                          const Expanded(
+                            child: Shimmer(
+                              child: Row(
+                                children: [
+                                  SkeletonBox.circle(size: 64),
+                                  SizedBox(width: 16),
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      SkeletonBox(width: 170, height: 30),
+                                      SizedBox(height: 8),
+                                      SkeletonBox(width: 120, height: 11),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          )
+                        else ...[
+                          RiderAvatar(
+                              initials: profile?.initials ?? '', size: 64),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Expanded(
-                                    child: Text(b.name,
-                                        style: displayStyle(size: 20))),
-                                if (b.isPrimary)
-                                  const LabelMono('Primary',
-                                      color: AppColors.primary),
-                                const SizedBox(width: 8),
-                                const Icon(Icons.edit_outlined,
-                                    size: 16, color: AppColors.mutedForeground),
+                                Text(
+                                    profile?.displayName ??
+                                        profile?.username ??
+                                        '',
+                                    style: displayStyle(size: 30)),
+                                const SizedBox(height: 4),
+                                Text(
+                                  [
+                                    if (profile?.city?.isNotEmpty == true)
+                                      profile!.city!,
+                                    if (profile?.username != null)
+                                      '@${profile!.username}',
+                                  ].join(' · '),
+                                  style: monoStyle(size: 11, tracking: 0),
+                                ),
                               ],
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              [
-                                if (b.year != null) '${b.year}',
-                                '${formatDistance(b.riddenKm)} km ridden',
-                                if (b.odometerKm > b.riddenKm)
-                                  'odo ${formatNumber(b.odometerKm.round())} km',
-                              ].join(' · '),
-                              style: monoStyle(size: 11, tracking: 0),
-                            ),
-                          ],
+                          ),
+                        ],
+                        IconButton(
+                          onPressed: _signOut,
+                          icon: const Icon(Icons.logout, size: 20),
+                          tooltip: 'Sign out',
                         ),
+                      ],
+                    ),
+                  ),
+                  if (error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(error,
+                          style: const TextStyle(
+                              fontSize: 13, color: AppColors.mutedForeground)),
+                    ),
+                  if (follows != null && rideCount != null ||
+                      loadingCounts) ...[
+                    const SizedBox(height: 20),
+                    AppCard(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Row(
+                        children: [
+                          _col(follows?.followers, 'followers'),
+                          _col(follows?.following, 'following'),
+                          _col(rideCount, 'rides'),
+                        ],
                       ),
-                    ],
+                    ),
+                  ],
+                  const SizedBox(height: 24),
+                  const LabelMono('Units'),
+                  const SizedBox(height: 8),
+                  AppCard(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Distance and speed',
+                            style: TextStyle(fontSize: 14)),
+                        const SizedBox(height: 10),
+                        _UnitsPicker(
+                          value: ref.watch(unitsProvider),
+                          onChanged: ref.read(unitsProvider.notifier).set,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 24),
+                  const LabelMono('Privacy'),
+                  const SizedBox(height: 8),
+                  // const AppCard(
+                  //   padding: EdgeInsets.all(16),
+                  //   child: Row(
+                  //     mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  //     children: [
+                  //       Flexible(
+                  //         child: Text('New rides default to',
+                  //             style: TextStyle(fontSize: 14)),
+                  //       ),
+                  //       Text('Public',
+                  //           style: TextStyle(
+                  //               fontSize: 14, fontWeight: FontWeight.w600)),
+                  //     ],
+                  //   ),
+                  // ),
+                ],
               ),
             ),
-          ),
-          InkWell(
-            onTap: _editBike,
-            borderRadius: BorderRadius.circular(16),
-            child: CustomPaint(
-              painter: _DashedRRectPainter(),
-              child: const SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: Center(
-                  child: Text(
-                    '+ Add motorcycle',
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.mutedForeground),
-                  ),
-                ),
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: ProfileTabsHeader(
+                tabs: _tabs,
+                tab: _tab,
+                onChanged: (t) => setState(() => _tab = t),
               ),
             ),
-          ),
-          const SizedBox(height: 24),
-          const LabelMono('Privacy'),
-          const SizedBox(height: 8),
-          AppCard(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                const Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('Default ride visibility',
-                        style: TextStyle(fontSize: 14)),
-                    Text('Followers',
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600)),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: const [
-                    Text('Hide start & end near home',
-                        style: TextStyle(fontSize: 14)),
-                    Text('On',
-                        style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.primary)),
-                  ],
-                ),
-              ],
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+              sliver: switch (_tab) {
+                ProfileTab.activities => RideListSliver(
+                    rides: rides,
+                    loading: ridesState.isLoading || pendingState.isLoading,
+                    loadingMore: pages?.loadingMore ?? false,
+                    empty: 'No rides yet. Hit Record and go ride!',
+                    error: 'Couldn\'t load your rides. Pull down to retry.',
+                  ),
+                ProfileTab.memories when uid != null =>
+                  MemoriesSliver(riderId: uid, mine: true),
+                ProfileTab.garage => SliverToBoxAdapter(
+                    child: bikes == null && !bikesState.isLoading
+                        ? const TabMessage(
+                            'Couldn\'t load your bikes. Pull down to retry.')
+                        : BikeGrid(
+                            loading: bikes == null,
+                            padding: EdgeInsets.zero,
+                            bikes: bikes ?? const [],
+                            tile: (b) => BikeTile(
+                              bike: b,
+                              editable: true,
+                              onTap: () => editBike(b),
+                              badge: b.isPrimary ? 'Primary' : null,
+                              subtitle: [
+                                '${context.units.totalText(b.riddenKm)} ridden',
+                                if (b.year != null) '${b.year}',
+                              ].join(' · '),
+                            ),
+                            onAdd: editBike,
+                            addLabel: 'Add motorcycle',
+                          ),
+                  ),
+                _ => const SliverToBoxAdapter(child: SizedBox.shrink()),
+              },
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  static String _count(int? n) => n == null ? '–' : formatNumber(n);
-
-  Widget _col(String v, String l) {
+  Widget _col(int? value, String label) {
     return Expanded(
       child: Column(
         children: [
-          Text(v, style: displayStyle(size: 24)),
+          value == null
+              ? const Shimmer(child: SkeletonBox(width: 40, height: 24))
+              : Text(formatNumber(value), style: displayStyle(size: 24)),
           const SizedBox(height: 4),
-          LabelMono(l),
+          LabelMono(label),
         ],
       ),
     );
   }
 }
 
-class _DashedRRectPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rrect =
-        RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(16));
-    final path = Path()..addRRect(rrect);
-    final paint = Paint()
-      ..color = AppColors.border
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    const dash = 6.0;
-    const gap = 4.0;
-    for (final metric in path.computeMetrics()) {
-      var dist = 0.0;
-      while (dist < metric.length) {
-        final next = math.min(dist + dash, metric.length);
-        canvas.drawPath(metric.extractPath(dist, next), paint);
-        dist += dash + gap;
-      }
-    }
-  }
+/// Kilometres or miles, as two segments.
+class _UnitsPicker extends StatelessWidget {
+  const _UnitsPicker({required this.value, required this.onChanged});
+
+  final Units value;
+  final ValueChanged<Units> onChanged;
+
+  static const _labels = {
+    Units.metric: 'Kilometres · km/h',
+    Units.imperial: 'Miles · mph',
+  };
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: AppColors.panel,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          for (final u in Units.values)
+            Expanded(
+              child: Semantics(
+                button: true,
+                selected: u == value,
+                child: GestureDetector(
+                  onTap: () => onChanged(u),
+                  behavior: HitTestBehavior.opaque,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    height: 40,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: u == value ? AppColors.card : Colors.transparent,
+                      borderRadius: BorderRadius.circular(9),
+                      boxShadow: u == value
+                          ? [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.08),
+                                blurRadius: 6,
+                                offset: const Offset(0, 1),
+                              ),
+                            ]
+                          : null,
+                    ),
+                    child: Text(
+                      _labels[u]!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: u == value
+                              ? AppColors.foreground
+                              : AppColors.mutedForeground),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }

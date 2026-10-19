@@ -2,12 +2,17 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/models.dart';
+import '../services/data_changes.dart';
 
 class BikeRepository {
-  BikeRepository({SupabaseClient? client})
-      : _client = client ?? Supabase.instance.client;
+  BikeRepository({
+    SupabaseClient? client,
+    DataChanges changes = const DataChanges(),
+  })  : _client = client ?? Supabase.instance.client,
+        _changes = changes;
 
   final SupabaseClient _client;
+  final DataChanges _changes;
 
   static const photoBucket = 'bike-photos';
 
@@ -45,6 +50,7 @@ class BikeRepository {
         })
         .select()
         .single();
+    _changes.bikes();
     return BikeRecord.fromJson(Map<String, dynamic>.from(row));
   }
 
@@ -73,6 +79,7 @@ class BikeRepository {
         .eq('id', id)
         .select()
         .single();
+    _changes.bikes();
     return BikeRecord.fromJson(Map<String, dynamic>.from(row));
   }
 

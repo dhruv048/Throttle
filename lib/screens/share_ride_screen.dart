@@ -1,88 +1,74 @@
 import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../data.dart';
 import '../models/models.dart';
 import '../theme.dart';
 import '../widgets/photo_picker.dart';
-import '../widgets/route_map.dart';
-import '../widgets/tracked_route_map.dart';
-
-enum ShareBackground { bike, photo, map, plain }
+import '../widgets/share_card.dart';
 
 /// Builds a 1080×1350 (4:5) ride image and hands it to the OS share sheet.
 class ShareRideScreen extends StatefulWidget {
-  const ShareRideScreen({super.key, required this.item});
+  const ShareRideScreen({super.key, required this.item, this.design});
 
   final FeedItem item;
+
+  /// The card's design, when it's also used elsewhere (the card posted with
+  /// a ride): changes made here show up there too.
+  final ValueNotifier<ShareCardDesign>? design;
 
   @override
   State<ShareRideScreen> createState() => _ShareRideScreenState();
 }
 
 class _ShareRideScreenState extends State<ShareRideScreen> {
-  // The card is laid out at this logical size and captured at 3x.
-  static const _canvas = Size(360, 450);
-  static const _pixelRatio = 3.0;
+  /// One per card, to capture whichever is tapped.
+  final _cardKeys = {for (final s in ShareCardStyle.values) s: GlobalKey()};
+  late final ValueNotifier<ShareCardDesign> _design =
+      widget.design ?? ValueNotifier(ShareCardDesign.initial(item));
 
-  final _cardKey = GlobalKey();
-  final _shareButtonKey = GlobalKey();
-  late ShareBackground _background;
-  PickedPhoto? _photo;
-  bool _sharing = false;
+  /// The card being shared.
+  ShareCardStyle? _sharing;
 
   FeedItem get item => widget.item;
   bool get _hasTrack => item.points.length >= 2;
   bool get _hasBikePhoto => item.bikePhotoUrl != null;
 
   @override
-  void initState() {
-    super.initState();
-    _background = _hasBikePhoto
-        ? ShareBackground.bike
-        : _hasTrack
-            ? ShareBackground.map
-            : ShareBackground.plain;
+  void dispose() {
+    if (widget.design == null) _design.dispose();
+    super.dispose();
   }
 
   Future<void> _choosePhoto() async {
     final photo = await pickPhoto(context, title: 'Your photo');
     if (photo != null) {
-      setState(() {
-        _photo = photo;
-        _background = ShareBackground.photo;
-      });
+      _design.value = _design.value.withPhoto(Uint8List.fromList(photo.bytes));
     }
   }
 
-  Future<void> _share() async {
-    if (_sharing) return;
-    setState(() => _sharing = true);
+  /// Shares the card in [style] (and makes it the one posted with the ride).
+  Future<void> _share(ShareCardStyle style) async {
+    if (_sharing != null) return;
+    final design = _design.value.withStyle(style);
+    _design.value = design;
+    setState(() => _sharing = style);
     try {
-      // Let any just-loaded image paint before capturing.
-      await WidgetsBinding.instance.endOfFrame;
-      final boundary =
-          _cardKey.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-      final image = await boundary.toImage(pixelRatio: _pixelRatio);
-      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      final key = _cardKeys[style]!;
+      final image =
+          await renderShareCard(context, key, item: item, design: design);
+      final png = await encodePng(image);
       image.dispose();
-      if (data == null) throw StateError('Could not render image');
 
-      final box =
-          _shareButtonKey.currentContext?.findRenderObject() as RenderBox?;
+      final box = key.currentContext?.findRenderObject() as RenderBox?;
       final origin =
           box == null ? null : box.localToGlobal(Offset.zero) & box.size;
       final r = item.ride;
       final bike =
           item.bikeName?.isNotEmpty == true ? ' on my ${item.bikeName}' : '';
       await SharePlus.instance.share(ShareParams(
-        files: [
-          XFile.fromData(data.buffer.asUint8List(), mimeType: 'image/png')
-        ],
+        files: [XFile.fromData(png, mimeType: 'image/png')],
         fileNameOverrides: [
           'throttle-ride-${DateTime.now().millisecondsSinceEpoch}.png'
         ],
@@ -97,7 +83,7 @@ class _ShareRideScreenState extends State<ShareRideScreen> {
         );
       }
     } finally {
-      if (mounted) setState(() => _sharing = false);
+      if (mounted) setState(() => _sharing = null);
     }
   }
 
@@ -111,81 +97,137 @@ class _ShareRideScreenState extends State<ShareRideScreen> {
         title: Text('Share ride', style: displayStyle(size: 20)),
       ),
       body: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
-                child: Center(
-                  child: AspectRatio(
-                    aspectRatio: _canvas.width / _canvas.height,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: FittedBox(
-                        child: RepaintBoundary(
-                          key: _cardKey,
-                          child: SizedBox.fromSize(
-                            size: _canvas,
-                            child: _ShareCard(
-                              item: item,
-                              background: _background,
-                              photoBytes: _photo?.bytes,
+        child: ValueListenableBuilder<ShareCardDesign>(
+          valueListenable: _design,
+          builder: (context, design, _) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                child: Row(
+                  children: [
+                    _rowLabel('Background'),
+                    if (_hasBikePhoto)
+                      _chip(design, 'Bike photo', ShareBackground.bike),
+                    _chip(
+                      design,
+                      design.photo == null ? 'Your photo…' : 'Your photo',
+                      ShareBackground.photo,
+                      onTap: design.photo == null ? _choosePhoto : null,
+                    ),
+                    if (design.photo != null)
+                      IconButton(
+                        tooltip: 'Change photo',
+                        onPressed: _choosePhoto,
+                        icon: const Icon(Icons.edit_outlined, size: 18),
+                      ),
+                    if (_hasTrack)
+                      _chip(design, 'Route map', ShareBackground.map),
+                    _chip(design, 'Plain', ShareBackground.plain),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+                child: Text('Tap a card to share it.',
+                    style: monoStyle(size: 11, tracking: 0)),
+              ),
+              Expanded(
+                // Not a lazy grid: every card stays built, to be captured.
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      const gap = 12.0;
+                      final width = (constraints.maxWidth - gap) / 2;
+                      return Wrap(
+                        spacing: gap,
+                        runSpacing: 16,
+                        children: [
+                          for (final style in ShareCardStyle.values)
+                            SizedBox(
+                              width: width,
+                              child: _tile(design, style),
                             ),
-                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One style of card: tap to share it.
+  Widget _tile(ShareCardDesign design, ShareCardStyle style) {
+    final sharing = _sharing == style;
+    final current = widget.design != null && design.style == style;
+    return Semantics(
+      button: true,
+      label: 'Share the ${style.label} card',
+      child: GestureDetector(
+        onTap: () => _share(style),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AspectRatio(
+              aspectRatio: ShareCard.size.aspectRatio,
+              child: Container(
+                clipBehavior: Clip.antiAlias,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: current ? AppColors.primary : Colors.transparent,
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.10),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+                ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    ShareCardFrame(
+                      boundaryKey: _cardKeys[style]!,
+                      item: item,
+                      design: design.withStyle(style),
+                    ),
+                    if (sharing)
+                      const ColoredBox(
+                        color: Colors.black45,
+                        child: Center(
+                          child: CircularProgressIndicator(color: Colors.white),
                         ),
                       ),
-                    ),
-                  ),
+                  ],
                 ),
               ),
             ),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  if (_hasBikePhoto) _chip('Bike photo', ShareBackground.bike),
-                  _chip(
-                    _photo == null ? 'Your photo…' : 'Your photo',
-                    ShareBackground.photo,
-                    onTap: _photo == null ? _choosePhoto : null,
-                  ),
-                  if (_photo != null)
-                    IconButton(
-                      tooltip: 'Change photo',
-                      onPressed: _choosePhoto,
-                      icon: const Icon(Icons.edit_outlined, size: 18),
-                    ),
-                  if (_hasTrack) _chip('Route map', ShareBackground.map),
-                  _chip('Plain', ShareBackground.plain),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-              child: SizedBox(
-                key: _shareButtonKey,
-                width: double.infinity,
-                height: 56,
-                child: FilledButton.icon(
-                  onPressed: _sharing ? null : _share,
-                  icon: _sharing
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.ios_share),
-                  label: Text('SHARE',
-                      style: displayStyle(size: 20, color: Colors.white)),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16)),
-                  ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(style.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
                 ),
-              ),
+                Icon(current ? Icons.check_circle : Icons.ios_share,
+                    size: 16,
+                    color: current
+                        ? AppColors.primary
+                        : AppColors.mutedForeground),
+              ],
             ),
           ],
         ),
@@ -193,15 +235,26 @@ class _ShareRideScreenState extends State<ShareRideScreen> {
     );
   }
 
-  Widget _chip(String label, ShareBackground value, {VoidCallback? onTap}) {
-    final on = _background == value;
+  Widget _rowLabel(String text) => Padding(
+        padding: const EdgeInsets.only(right: 10),
+        child: Text(text.toUpperCase(), style: labelMono(size: 9)),
+      );
+
+  Widget _chip(ShareCardDesign design, String label, ShareBackground value,
+      {VoidCallback? onTap}) {
+    final on = design.background == value;
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: ChoiceChip(
         label: Text(label),
         selected: on,
-        onSelected: (_) =>
-            onTap != null ? onTap() : setState(() => _background = value),
+        onSelected: (_) {
+          if (onTap != null) {
+            onTap();
+          } else {
+            _design.value = design.withBackground(value);
+          }
+        },
         selectedColor: AppColors.accent,
         labelStyle: TextStyle(
           fontWeight: FontWeight.w600,
@@ -212,205 +265,6 @@ class _ShareRideScreenState extends State<ShareRideScreen> {
                 ? AppColors.primary.withValues(alpha: 0.4)
                 : AppColors.border),
         showCheckmark: false,
-      ),
-    );
-  }
-}
-
-/// The image itself. Laid out at 360×450 logical pixels.
-class _ShareCard extends StatelessWidget {
-  const _ShareCard(
-      {required this.item, required this.background, this.photoBytes});
-
-  final FeedItem item;
-  final ShareBackground background;
-  final List<int>? photoBytes;
-
-  static const _months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec'
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final r = item.ride;
-    final when = r.rodeAt?.toLocal();
-    final isMap = background == ShareBackground.map;
-    final showTrace = !isMap && item.points.length >= 2;
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        _background(),
-        // Scrims keep white text readable on any photo.
-        DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.black.withValues(alpha: isMap ? 0.25 : 0.45),
-                Colors.transparent,
-                Colors.transparent,
-                Colors.black.withValues(alpha: isMap ? 0.8 : 0.75),
-              ],
-              stops: const [0, 0.22, 0.45, 1],
-            ),
-          ),
-        ),
-        if (showTrace)
-          Positioned(
-            top: 64,
-            right: 16,
-            width: 150,
-            height: 130,
-            child: CustomPaint(
-              painter: TrackShapePainter(
-                item.points,
-                lineColor: Colors.white,
-                casingColor: AppColors.primary,
-                startColor: Colors.white,
-                endColor: AppColors.primary,
-                strokeWidth: 3,
-                padding: 8,
-                shadow: true,
-              ),
-            ),
-          ),
-        Positioned(
-          top: 16,
-          left: 18,
-          right: 18,
-          child: Row(
-            children: [
-              Text('THROTTLE',
-                  style: displayStyle(size: 18, color: Colors.white)),
-              const Spacer(),
-              if (when != null)
-                Text(
-                  '${when.day} ${_months[when.month - 1]} ${when.year}',
-                  style: monoStyle(size: 10, tracking: 0, color: Colors.white),
-                ),
-            ],
-          ),
-        ),
-        Positioned(
-          left: 18,
-          right: 18,
-          // Clear the map's "© OpenStreetMap" credit.
-          bottom: isMap ? 30 : 18,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                r.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: displayStyle(
-                    size: 16, color: Colors.white.withValues(alpha: 0.9)),
-              ),
-              Text.rich(
-                TextSpan(children: [
-                  TextSpan(
-                    text: r.distanceKm.toStringAsFixed(2),
-                    style: displayStyle(size: 56, color: Colors.white),
-                  ),
-                  TextSpan(
-                    text: ' km',
-                    style: displayStyle(
-                        size: 20, color: Colors.white.withValues(alpha: 0.85)),
-                  ),
-                ]),
-              ),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  _stat(formatDuration(r.movingTimeSecs), 'time'),
-                  _stat(r.avgSpeedKmh.toStringAsFixed(0), 'avg km/h'),
-                  _stat(r.maxSpeedKmh.round().toString(), 'top km/h'),
-                  _stat(formatNumber(r.elevationM.round()), 'm climb'),
-                ],
-              ),
-              if (item.bikeName?.isNotEmpty == true) ...[
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    const Icon(Icons.two_wheeler,
-                        size: 14, color: Colors.white),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        item.bikeName!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: monoStyle(
-                            size: 11, tracking: 0, color: Colors.white),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _background() {
-    switch (background) {
-      case ShareBackground.bike:
-        return Image.network(item.bikePhotoUrl!,
-            fit: BoxFit.cover, errorBuilder: (_, __, ___) => _plain());
-      case ShareBackground.photo:
-        return photoBytes == null
-            ? _plain()
-            : Image.memory(Uint8List.fromList(photoBytes!), fit: BoxFit.cover);
-      case ShareBackground.map:
-        return IgnorePointer(
-          child: TrackedRouteMap.track(
-            item.points,
-            height: _ShareRideScreenState._canvas.height,
-            interactive: false,
-            // Keep the route in the clear band between header and stats.
-            fitPadding: const EdgeInsets.fromLTRB(28, 64, 28, 200),
-          ),
-        );
-      case ShareBackground.plain:
-        return _plain();
-    }
-  }
-
-  Widget _plain() => const DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF2B2D33), Color(0xFF14151A)],
-          ),
-        ),
-      );
-
-  Widget _stat(String value, String label) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(value, style: displayStyle(size: 20, color: Colors.white)),
-          Text(label.toUpperCase(),
-              style: labelMono(color: Colors.white.withValues(alpha: 0.75))),
-        ],
       ),
     );
   }

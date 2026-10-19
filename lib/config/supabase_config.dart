@@ -32,4 +32,3 @@ class SupabaseConfig {
       anonKey.isNotEmpty &&
       !anonKey.contains('YOUR_');
 }
-

@@ -4,6 +4,8 @@
 class Env {
   static const supabaseUrl = 'https://YOUR_PROJECT.supabase.co';
   static const supabaseAnonKey = 'YOUR_SUPABASE_ANON_KEY';
-  static const googleWebClientId = 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com';
-  static const googleIosClientId = 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com';
+  static const googleWebClientId =
+      'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com';
+  static const googleIosClientId =
+      'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com';
 }

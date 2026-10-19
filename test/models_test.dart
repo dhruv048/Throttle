@@ -1,5 +1,7 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
-import 'package:throttle/data.dart';
+import 'package:throttle/format.dart';
 import 'package:throttle/models/models.dart';
 
 void main() {
@@ -38,6 +40,26 @@ void main() {
       expect(restored.lng, closeTo(85.3240, 0.0001));
       expect(restored.elev, 1400.5);
       expect(restored.accuracy, 4.2);
+    });
+
+    test('is stored with 6-decimal coordinates', () {
+      final point = TrackPoint(
+        lat: 27.717245678901234,
+        lng: 85.324012345678901,
+        elev: 1400.56789,
+        accuracy: 4.23456,
+        t: DateTime.utc(2026, 10, 11, 6, 30, 15, 123, 456),
+      );
+      final json = point.toJson();
+      expect(json['lat'], 27.717246);
+      expect(json['lng'], 85.324012);
+      expect(json['elev'], 1400.6);
+      expect(json['accuracy'], 4.2);
+      expect(json['t'], '2026-10-11T06:30:15.123Z');
+      expect(
+          jsonEncode(json),
+          '{"lat":27.717246,"lng":85.324012,"t":"2026-10-11T06:30:15.123Z",'
+          '"elev":1400.6,"accuracy":4.2}');
     });
   });
 

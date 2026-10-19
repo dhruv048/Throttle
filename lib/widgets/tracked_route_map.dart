@@ -12,6 +12,9 @@ class TrackedRouteMap extends StatelessWidget {
     this.height = 220,
     this.interactive = true,
     this.fitPadding,
+    this.pins = const [],
+    this.attribution = true,
+    this.dark = false,
   });
 
   /// Map for a saved ride's track (downsampled for long rides).
@@ -21,6 +24,9 @@ class TrackedRouteMap extends StatelessWidget {
     double height = 220,
     bool interactive = true,
     EdgeInsets? fitPadding,
+    List<Marker> pins = const [],
+    bool attribution = true,
+    bool dark = false,
   }) {
     const maxPoints = 400;
     final step = (track.length / maxPoints).ceil().clamp(1, track.length + 1);
@@ -36,6 +42,9 @@ class TrackedRouteMap extends StatelessWidget {
       height: height,
       interactive: interactive,
       fitPadding: fitPadding,
+      pins: pins,
+      attribution: attribution,
+      dark: dark,
     );
   }
 
@@ -48,6 +57,16 @@ class TrackedRouteMap extends StatelessWidget {
   /// Space to keep clear around the route when fitting the camera, e.g. to
   /// keep it out from under overlaid text.
   final EdgeInsets? fitPadding;
+
+  /// Drawn over the route, e.g. where photos were taken.
+  final List<Marker> pins;
+
+  /// False when the caller shows the OpenStreetMap credit itself, e.g. a
+  /// share card placing it clear of its text.
+  final bool attribution;
+
+  /// Night-coloured tiles.
+  final bool dark;
 
   static const _interaction = InteractionOptions(
     flags: InteractiveFlag.pinchZoom |
@@ -94,7 +113,7 @@ class TrackedRouteMap extends StatelessWidget {
                 interactionOptions: interactive ? _interaction : _static,
               ),
         children: [
-          MapTiles.layer(),
+          MapTiles.layer(dark: dark),
           if (points.length > 1)
             PolylineLayer(
               polylines: [
@@ -124,19 +143,21 @@ class TrackedRouteMap extends StatelessWidget {
                 ),
             ],
           ),
+          if (pins.isNotEmpty) MarkerLayer(markers: pins),
           // Required by the OpenStreetMap tile licence.
-          Align(
-            alignment: Alignment.bottomRight,
-            child: Container(
-              margin: const EdgeInsets.all(4),
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              color: Colors.white.withValues(alpha: 0.75),
-              child: const Text(
-                '© OpenStreetMap',
-                style: TextStyle(fontSize: 9, color: Color(0xFF555555)),
+          if (attribution)
+            Align(
+              alignment: Alignment.bottomRight,
+              child: Container(
+                margin: const EdgeInsets.all(4),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                color: Colors.white.withValues(alpha: 0.75),
+                child: const Text(
+                  '© OpenStreetMap',
+                  style: TextStyle(fontSize: 9, color: Color(0xFF555555)),
+                ),
               ),
             ),
-          ),
         ],
       ),
     );

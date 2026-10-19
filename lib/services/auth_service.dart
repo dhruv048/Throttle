@@ -47,46 +47,59 @@ class AuthService {
     await ensureGoogleInitialized();
 
     if (SupabaseConfig.googleWebClientId.isEmpty) {
-      // Browser OAuth fallback when native client IDs are not configured yet.
-      await _client.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: kIsWeb ? null : SupabaseConfig.authRedirect,
-        authScreenLaunchMode: kIsWeb
-            ? LaunchMode.platformDefault
-            : LaunchMode.externalApplication,
-      );
-      return AuthResponse(session: _client.auth.currentSession);
+      // Native sign-in needs a web client ID; use the browser until it's set.
+      return _browserSignIn();
     }
 
     try {
       final account = await _google.authenticate();
-      final googleAuth = account.authentication;
-      final idToken = googleAuth.idToken;
+      final idToken = account.authentication.idToken;
       if (idToken == null) {
         throw const AuthException('No ID token from Google Sign-In');
       }
 
-      final authorization =
-          await account.authorizationClient.authorizationForScopes([]);
-      final accessToken = authorization?.accessToken;
+      // Optional: Supabase only needs the ID token. Never let this step fail
+      // a sign-in that Google already approved.
+      String? accessToken;
+      try {
+        final authorization = await account.authorizationClient
+            .authorizationForScopes(const ['email', 'profile']);
+        accessToken = authorization?.accessToken;
+      } catch (_) {}
 
       return await _client.auth.signInWithIdToken(
         provider: OAuthProvider.google,
         idToken: idToken,
         accessToken: accessToken,
       );
+    } on GoogleSignInException catch (e) {
+      // Android's Credential Manager also reports setup errors as "canceled"
+      // ("[16] Account reauth failed", "[10] ..."), so look at the message.
+      final misconfigured =
+          RegExp(r'\[(10|16)\]').hasMatch(e.description ?? '') ||
+              e.code == GoogleSignInExceptionCode.clientConfigurationError ||
+              e.code == GoogleSignInExceptionCode.providerConfigurationError;
+      if (e.code == GoogleSignInExceptionCode.canceled && !misconfigured) {
+        return AuthResponse(); // the rider closed the account picker
+      }
+      debugPrint(
+          'Native Google sign-in failed ($e), falling back to browser sign-in.');
+      return _browserSignIn();
     } catch (e) {
       debugPrint(
-          'Native Google sign-in failed ($e), falling back to browser OAuth...');
-      await _client.auth.signInWithOAuth(
-        OAuthProvider.google,
-        redirectTo: kIsWeb ? null : SupabaseConfig.authRedirect,
-        authScreenLaunchMode: kIsWeb
-            ? LaunchMode.platformDefault
-            : LaunchMode.externalApplication,
-      );
-      return AuthResponse(session: _client.auth.currentSession);
+          'Native Google sign-in failed ($e), falling back to browser sign-in.');
+      return _browserSignIn();
     }
+  }
+
+  Future<AuthResponse> _browserSignIn() async {
+    await _client.auth.signInWithOAuth(
+      OAuthProvider.google,
+      redirectTo: kIsWeb ? null : SupabaseConfig.authRedirect,
+      authScreenLaunchMode:
+          kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
+    );
+    return AuthResponse(session: _client.auth.currentSession);
   }
 
   Future<void> signOut() async {

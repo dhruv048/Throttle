@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import '../theme.dart';
 
@@ -19,58 +21,68 @@ class ThrottleBottomNav extends StatelessWidget {
     (Icons.person_outline, Icons.person, 'Profile'),
   ];
 
+  /// On iPhones with a home indicator it only needs its bottom ~13 pt, so
+  /// the bar sits partly inside the safe area instead of floating a whole
+  /// inset (34 pt) plus a margin above the edge. Elsewhere (e.g. Android's
+  /// button bar) the inset is the system's, so the bar stays clear of it.
+  static double bottomGap(EdgeInsets viewPadding, TargetPlatform platform) {
+    final inset = viewPadding.bottom;
+    if (platform == TargetPlatform.iOS && inset > 0) {
+      return math.max(inset - 14, 8);
+    }
+    return inset + 16;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-        child: Container(
-          decoration: BoxDecoration(
-            color: AppColors.card.withValues(alpha: 0.9),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.08),
-                blurRadius: 16,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Row(
-            children: List.generate(_items.length, (i) {
-              final selected = i == index;
-              final item = _items[i];
-              final color =
-                  selected ? AppColors.primary : AppColors.mutedForeground;
-              return Expanded(
-                child: InkWell(
-                  onTap: () => onChanged(i),
-                  borderRadius: BorderRadius.circular(16),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          selected ? item.$2 : item.$1,
-                          size: 20,
-                          color: color,
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          item.$3.toUpperCase(),
-                          style:
-                              monoStyle(size: 9, color: color, tracking: 1.08),
-                        ),
-                      ],
-                    ),
+    final padding = MediaQuery.viewPaddingOf(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12 + padding.left, 8, 12 + padding.right,
+          bottomGap(padding, Theme.of(context).platform)),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.card.withValues(alpha: 0.9),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.border),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: List.generate(_items.length, (i) {
+            final selected = i == index;
+            final item = _items[i];
+            final color =
+                selected ? AppColors.primary : AppColors.mutedForeground;
+            return Expanded(
+              child: InkWell(
+                onTap: () => onChanged(i),
+                borderRadius: BorderRadius.circular(16),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        selected ? item.$2 : item.$1,
+                        size: 20,
+                        color: color,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        item.$3.toUpperCase(),
+                        style: monoStyle(size: 9, color: color, tracking: 1.08),
+                      ),
+                    ],
                   ),
                 ),
-              );
-            }),
-          ),
+              ),
+            );
+          }),
         ),
       ),
     );

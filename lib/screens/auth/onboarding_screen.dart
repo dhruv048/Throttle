@@ -1,36 +1,30 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/models.dart';
-import '../../repositories/profile_repository.dart';
-import '../../services/auth_service.dart';
+import '../../providers/core.dart';
 import '../../theme.dart';
 import '../../widgets/photo_picker.dart';
 import '../../widgets/ui.dart';
 
-class OnboardingScreen extends StatefulWidget {
+class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({
     super.key,
-    required this.auth,
-    this.profiles,
     this.initialUsername,
     this.initialDisplayName,
     this.onCompleted,
   });
 
-  final AuthService auth;
-  final ProfileRepository? profiles;
   final String? initialUsername;
   final String? initialDisplayName;
   final ValueChanged<Profile>? onCompleted;
 
   @override
-  State<OnboardingScreen> createState() => _OnboardingScreenState();
+  ConsumerState<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
-class _OnboardingScreenState extends State<OnboardingScreen> {
+class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   late final TextEditingController _username;
   late final TextEditingController _bike;
   late final TextEditingController _city;
@@ -58,6 +52,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _submit() async {
+    // The Shell replaces this screen once the profile saves; a keyboard left
+    // open here would stay up over Home.
+    hideKeyboard();
     final username = _username.text.trim().toLowerCase();
     final bike = _bike.text.trim();
     if (username.length < 3) {
@@ -80,8 +77,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     });
 
     try {
-      final profiles = widget.profiles ?? ProfileRepository();
-      final uid = widget.auth.currentUser!.id;
+      final profiles = ref.read(profileRepositoryProvider);
+      final uid = ref.read(currentUserIdProvider)!;
       final available =
           await profiles.isUsernameAvailable(username, excludingUserId: uid);
       if (!available) {
@@ -93,14 +90,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       }
 
       final year = int.tryParse(_year.text.trim());
-      final profile = await widget.auth.completeOnboarding(
-        username: username,
-        bikeName: bike,
-        bikeYear: year,
-        city: _city.text.trim().isEmpty ? null : _city.text.trim(),
-        displayName: widget.initialDisplayName,
-        bikePhoto: _bikePhoto?.file,
-      );
+      final profile = await ref.read(authServiceProvider).completeOnboarding(
+            username: username,
+            bikeName: bike,
+            bikeYear: year,
+            city: _city.text.trim().isEmpty ? null : _city.text.trim(),
+            displayName: widget.initialDisplayName,
+            bikePhoto: _bikePhoto?.file,
+          );
+      hideKeyboard(); // in case a field was tapped while saving
       widget.onCompleted?.call(profile);
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -118,6 +116,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 440),
             child: ListView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
               children: [
                 LabelMono('Welcome', color: AppColors.primary),
@@ -144,12 +143,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   label: 'City (optional)',
                   controller: _city,
                   hint: 'Kathmandu',
+                  capitalize: true,
                 ),
                 const SizedBox(height: 16),
                 _field(
                   label: 'First motorcycle',
                   controller: _bike,
                   hint: 'Yamaha MT-15',
+                  capitalize: true,
                 ),
                 const SizedBox(height: 16),
                 _field(
@@ -227,7 +228,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 const SizedBox(height: 12),
                 Center(
                   child: TextButton(
-                    onPressed: _busy ? null : () => widget.auth.signOut(),
+                    onPressed: _busy
+                        ? null
+                        : () => ref.read(authServiceProvider).signOut(),
                     child: Text(
                       'Sign out / switch account',
                       style: monoStyle(
@@ -251,6 +254,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     required String hint,
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
+    bool capitalize = false,
   }) {
     return AppCard(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -261,7 +265,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           TextField(
             controller: controller,
             keyboardType: keyboardType,
-            inputFormatters: inputFormatters,
+            textCapitalization:
+                capitalize ? TextCapitalization.words : TextCapitalization.none,
+            inputFormatters: [
+              ...?inputFormatters,
+              if (capitalize) const CapitalizeFirstFormatter(),
+            ],
             decoration: InputDecoration(
               hintText: hint,
               border: InputBorder.none,

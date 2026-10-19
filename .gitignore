@@ -20,3 +20,8 @@ lib/config/env.dart
 .env
 .env.*
 !.env.example
+
+# Android release signing (scripts/android_keys.sh)
+android/key.properties
+*.jks
+*.keystore

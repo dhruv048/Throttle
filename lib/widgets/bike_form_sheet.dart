@@ -1,12 +1,12 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/models.dart';
-import '../repositories/bike_repository.dart';
+import '../providers/core.dart';
 import '../theme.dart';
 import 'photo_picker.dart';
+import 'skeleton.dart';
 import 'ui.dart';
 
 /// Add a bike, or edit one when [bike] is given. Returns true if saved.
@@ -27,17 +27,17 @@ Future<bool> showBikeFormSheet(
   return saved == true;
 }
 
-class _BikeForm extends StatefulWidget {
+class _BikeForm extends ConsumerStatefulWidget {
   const _BikeForm({this.bike, required this.defaultPrimary});
 
   final BikeRecord? bike;
   final bool defaultPrimary;
 
   @override
-  State<_BikeForm> createState() => _BikeFormState();
+  ConsumerState<_BikeForm> createState() => _BikeFormState();
 }
 
-class _BikeFormState extends State<_BikeForm> {
+class _BikeFormState extends ConsumerState<_BikeForm> {
   late final _name = TextEditingController(text: widget.bike?.name ?? '');
   late final _year =
       TextEditingController(text: widget.bike?.year?.toString() ?? '');
@@ -72,13 +72,13 @@ class _BikeFormState extends State<_BikeForm> {
   Future<void> _save() async {
     final name = _name.text.trim();
     if (name.isEmpty || _saving) return;
-    final uid = Supabase.instance.client.auth.currentUser?.id;
+    final uid = ref.read(currentUserIdProvider);
     if (uid == null) return;
     String? optional(TextEditingController c) =>
         c.text.trim().isEmpty ? null : c.text.trim();
 
     setState(() => _saving = true);
-    final repo = BikeRepository();
+    final repo = ref.read(bikeRepositoryProvider);
     final messenger = ScaffoldMessenger.of(context);
     try {
       var bike = _editing
@@ -148,7 +148,7 @@ class _BikeFormState extends State<_BikeForm> {
                         ? Image.memory(Uint8List.fromList(_photo!.bytes),
                             fit: BoxFit.cover)
                         : existingUrl != null
-                            ? Image.network(existingUrl, fit: BoxFit.cover)
+                            ? NetworkPhoto(existingUrl)
                             : const Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
@@ -188,6 +188,8 @@ class _BikeFormState extends State<_BikeForm> {
             TextField(
               controller: _name,
               autofocus: !_editing,
+              textCapitalization: TextCapitalization.words,
+              inputFormatters: const [CapitalizeFirstFormatter()],
               decoration: const InputDecoration(
                 labelText: 'Motorcycle name *',
                 hintText: 'Ducati Scrambler',
@@ -200,6 +202,7 @@ class _BikeFormState extends State<_BikeForm> {
                   child: TextField(
                     controller: _year,
                     keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     decoration: const InputDecoration(
                         labelText: 'Year', hintText: '2023'),
                   ),
@@ -208,6 +211,8 @@ class _BikeFormState extends State<_BikeForm> {
                 Expanded(
                   child: TextField(
                     controller: _make,
+                    textCapitalization: TextCapitalization.words,
+                    inputFormatters: const [CapitalizeFirstFormatter()],
                     decoration: const InputDecoration(
                         labelText: 'Make', hintText: 'Ducati'),
                   ),
@@ -217,6 +222,8 @@ class _BikeFormState extends State<_BikeForm> {
             const SizedBox(height: 12),
             TextField(
               controller: _model,
+              textCapitalization: TextCapitalization.words,
+              inputFormatters: const [CapitalizeFirstFormatter()],
               decoration: const InputDecoration(
                   labelText: 'Model', hintText: 'Icon Dark'),
             ),

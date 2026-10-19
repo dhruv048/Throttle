@@ -49,6 +49,8 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>This app uses your location to record your rides.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Allow location Always so Throttle keeps recording your ride when your phone is locked or you switch apps.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo of your bike or your ride to share.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

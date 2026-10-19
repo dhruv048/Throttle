@@ -8,13 +8,36 @@ the stats should be real not mock
 
 
 
-
-after the ride is done, make so that the ride is automatically saved to the user's profile and allow users to share ride with other apps in form of image
-let user add their own image, use image of their bike (which will be saved while adding bike and is editable), or share the image of the bike with the distance, time and other minor detials written on the image.
-
-
-
 The home feed downloads every ride's full track. Thirty 1-hour rides is about 15 MB of JSON parsed on the phone every refresh, yet the cards only draw 400 points. This is the biggest scaling problem. Fix: store a ~200-point preview per ride (measured at 1.5 KB) and load the full track only on the detail page.
 A ride in progress only exists in memory. If the app is killed mid-ride, the whole ride is lost. Fix: save the in-progress ride to the phone every few seconds.
 Too many decimal places. Coordinates are stored with 17 digits; 6 digits is 11 cm precision. Rounding cuts storage from 185 KB to 72 KB per hour (measured).
 GPS runs whenever the app is open. The Record tab is created at launch, so GPS polls once a second even on the Home tab, which drains battery. Fix: only listen while the Record tab is visible or a ride is active.
+
+
+
+
+
+
+Motorcycle POIs — Find petrol pumps, workshops, tyre shops, cafés, hotels and viewpoints.
+Bike Maintenance — Track servicing, oil, tyres, brakes, chain, battery and reminders.
+
+
+
+
+
+use riverpod
+
+
+in the share ride card, the route map should appearbeside the ride stats, current placement is awkward. however it shouldn't decrease the size of the stats, rather i want to highlight the avg speed and top speed as it is edxactly what the user wanna flex.
+first letter caps in first motorcycle input, in all input
+keyboard got stuck after onbaording, home page came after entring bike dtails but the keyboard stayed
+nav bar not at full bottom in iphone, there is too much space
+edit rides post saving the ride (public, followers, private)
+build profile page, from rides, clicing on the profile should lead to the rider's profile with follow functionality
+liking and following should send notification and receive notification in the home page notification section
+hide the comment parts, comment them from the code, we'll add that functionality later
+in the garage section of the profile, keep bikes card keep two bike in a row. same in the record page, two bike per row.
+when asking location permission if the user clicks while using the app, show popup that bg tracking is necessary if not you won't be able to record ride when off
+Ride Photos/Videos — Attach photos/videos to rides and route locations with Ride Journal — Turn a ride into a story with photos, route and memories.
+A ride in progress only exists in memory. If the app is killed mid-ride, the whole ride is lost. Fix: save the in-progress ride to the phone every few seconds.
+Too many decimal places. Coordinates are stored with 17 digits; 6 digits is 11 cm precision. Rounding cuts storage from 185 KB to 72 KB per hour (measured).

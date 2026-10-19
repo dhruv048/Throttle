@@ -1,64 +1,31 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../data.dart';
+import '../format.dart';
 import '../models/models.dart';
-import '../repositories/ride_repository.dart';
+import '../providers/live.dart';
+import '../services/place_names.dart';
 import '../screens/ride_detail_screen.dart';
+import '../screens/rider_profile_screen.dart';
 import '../theme.dart';
 import 'rider_avatar.dart';
 import 'tracked_route_map.dart';
 import 'ui.dart';
+import '../units.dart';
 
-class RideCard extends StatefulWidget {
-  const RideCard({super.key, required this.item});
+/// A ride in a list. Its kudos and comment counts stay live: the same ride
+/// can be on several screens at once, and they all keep in step.
+class RideCard extends ConsumerWidget {
+  const RideCard({super.key, required this.item, this.riderTappable = true});
 
   final FeedItem item;
 
-  @override
-  State<RideCard> createState() => _RideCardState();
-}
-
-class _RideCardState extends State<RideCard> {
-  late FeedItem item = widget.item;
-  bool _busy = false;
+  /// Tapping the rider opens their profile (not when it's already open).
+  final bool riderTappable;
 
   @override
-  void didUpdateWidget(covariant RideCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.item, widget.item)) item = widget.item;
-  }
-
-  Future<void> _toggleKudos() async {
-    if (_busy || item.pending) return;
-    final before = item;
-    final liked = !before.likedByMe;
-    setState(() {
-      _busy = true;
-      item = before.copyWith(
-        likedByMe: liked,
-        kudosCount: before.ride.kudosCount + (liked ? 1 : -1),
-      );
-    });
-    try {
-      final repo = RideRepository();
-      liked
-          ? await repo.giveKudos(before.ride.id)
-          : await repo.removeKudos(before.ride.id);
-    } catch (_) {
-      if (mounted) setState(() => item = before);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  void _open() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => RideDetailScreen(item: item)),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final item = watchLiveRide(ref, this.item);
     final r = item.ride;
     final rider = item.rider;
     final when = r.rodeAt;
@@ -68,7 +35,9 @@ class _RideCardState extends State<RideCard> {
     ].join(' · ');
     final liked = item.likedByMe;
     return GestureDetector(
-      onTap: _open,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => RideDetailScreen(item: item)),
+      ),
       behavior: HitTestBehavior.opaque,
       child: AppCard(
         clip: true,
@@ -79,17 +48,35 @@ class _RideCardState extends State<RideCard> {
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
               child: Row(
                 children: [
-                  RiderAvatar(initials: rider.initials),
-                  const SizedBox(width: 12),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(rider.displayName ?? rider.username ?? 'Rider',
-                            style: const TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w600)),
-                        Text(subtitle, style: monoStyle(size: 11, tracking: 0)),
-                      ],
+                    child: GestureDetector(
+                      // The card itself opens the ride.
+                      onTap: riderTappable && !item.pending
+                          ? () => openRiderProfile(context, rider)
+                          : null,
+                      behavior: HitTestBehavior.opaque,
+                      child: Row(
+                        children: [
+                          RiderAvatar(initials: rider.initials),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                    rider.displayName ??
+                                        rider.username ??
+                                        'Rider',
+                                    style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600)),
+                                Text(subtitle,
+                                    style: monoStyle(size: 11, tracking: 0)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   if (item.pending)
@@ -111,10 +98,25 @@ class _RideCardState extends State<RideCard> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(r.title, style: displayStyle(size: 18)),
-                  if (r.startPlace != null && r.endPlace != null)
-                    Text('${r.startPlace} → ${r.endPlace}',
-                        style: const TextStyle(
-                            fontSize: 14, color: AppColors.mutedForeground)),
+                  if (placesLine(r.startPlace, r.endPlace) != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.flag_rounded,
+                              size: 14, color: AppColors.primary),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(placesLine(r.startPlace, r.endPlace)!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 14,
+                                    color: AppColors.mutedForeground)),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -124,7 +126,8 @@ class _RideCardState extends State<RideCard> {
                 children: [
                   Expanded(
                       child: StatBlock(
-                          value: formatKm(r.distanceKm), label: 'km')),
+                          value: context.units.short(r.distanceKm),
+                          label: context.units.distanceUnit)),
                   Expanded(
                       child: StatBlock(
                           value: formatDuration(r.movingTimeSecs),
@@ -148,7 +151,9 @@ class _RideCardState extends State<RideCard> {
               child: Row(
                 children: [
                   GestureDetector(
-                    onTap: _toggleKudos,
+                    onTap: () => ref
+                        .read(rideCountersProvider.notifier)
+                        .toggleKudos(item),
                     child: Row(
                       children: [
                         Icon(
@@ -171,13 +176,14 @@ class _RideCardState extends State<RideCard> {
                       ],
                     ),
                   ),
-                  const SizedBox(width: 20),
-                  const Icon(Icons.chat_bubble_outline,
-                      size: 16, color: AppColors.mutedForeground),
-                  const SizedBox(width: 6),
-                  Text('${r.commentsCount}',
-                      style: const TextStyle(
-                          fontSize: 14, color: AppColors.mutedForeground)),
+                  // Comments are hidden until they can be read and written.
+                  // const SizedBox(width: 20),
+                  // const Icon(Icons.chat_bubble_outline,
+                  //     size: 16, color: AppColors.mutedForeground),
+                  // const SizedBox(width: 6),
+                  // Text('${r.commentsCount}',
+                  //     style: const TextStyle(
+                  //         fontSize: 14, color: AppColors.mutedForeground)),
                 ],
               ),
             ),

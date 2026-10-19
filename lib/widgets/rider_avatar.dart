@@ -18,10 +18,13 @@ class RiderAvatar extends StatelessWidget {
         shape: BoxShape.circle,
         border: Border.all(color: AppColors.border),
       ),
-      child: Text(
-        initials,
-        style: monoStyle(size: 11, weight: FontWeight.w500, tracking: 0),
-      ),
+      child: initials.isEmpty
+          ? Icon(Icons.person,
+              size: size * 0.5, color: AppColors.mutedForeground)
+          : Text(
+              initials,
+              style: monoStyle(size: 11, weight: FontWeight.w500, tracking: 0),
+            ),
     );
   }
 }
